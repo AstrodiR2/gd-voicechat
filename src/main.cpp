@@ -21,7 +21,8 @@ using namespace geode::prelude;
 #define SERVER_HOST "gd-voicechat-server-production.up.railway.app"
 #define SERVER_PORT 443
 
-static std::atomic<bool> g_connected(false);
+// 0 = disconnected, 1 = connecting, 2 = connected
+static std::atomic<int> g_state(0);
 static int g_socket = -1;
 
 bool connectToServer() {
@@ -53,7 +54,6 @@ bool connectToServer() {
         return false;
     }
 
-    // WebSocket handshake
     std::string handshake =
         "GET / HTTP/1.1\r\n"
         "Host: " SERVER_HOST "\r\n"
@@ -68,7 +68,6 @@ bool connectToServer() {
     recv(g_socket, buf, sizeof(buf) - 1, 0);
 
     freeaddrinfo(res);
-    g_connected = true;
     return true;
 }
 
@@ -81,7 +80,7 @@ void disconnectFromServer() {
         #endif
         g_socket = -1;
     }
-    g_connected = false;
+    g_state = 0;
 }
 
 class $modify(VCMenuLayer, MenuLayer) {
@@ -105,26 +104,26 @@ class $modify(VCMenuLayer, MenuLayer) {
     }
 
     void onVoiceChat(CCObject*) {
-        if (!g_connected) {
+        if (g_state == 1) {
+            FLAlertLayer::create("VoiceChat", "Still connecting...", "OK")->show();
+            return;
+        }
+
+        if (g_state == 0) {
+            g_state = 1;
             std::thread([]() {
                 if (connectToServer()) {
-                    log::info("VoiceChat: connected to server!");
+                    g_state = 2;
+                    log::info("VoiceChat: connected!");
                 } else {
+                    g_state = 0;
                     log::error("VoiceChat: failed to connect!");
                 }
             }).detach();
-            FLAlertLayer::create(
-                "VoiceChat",
-                "Connecting to server...",
-                "OK"
-            )->show();
-        } else {
+            FLAlertLayer::create("VoiceChat", "Connecting...", "OK")->show();
+        } else if (g_state == 2) {
             disconnectFromServer();
-            FLAlertLayer::create(
-                "VoiceChat",
-                "Disconnected!",
-                "OK"
-            )->show();
+            FLAlertLayer::create("VoiceChat", "Disconnected!", "OK")->show();
         }
     }
 };
