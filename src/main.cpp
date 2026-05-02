@@ -18,8 +18,8 @@
 
 using namespace geode::prelude;
 
-#define SERVER_HOST "gd-voicechat-server-production.up.railway.app"
-#define SERVER_PORT 443
+#define SERVER_HOST "tramway.proxy.rlwy.net"
+#define SERVER_PORT 16282
 
 // 0 = disconnected, 1 = connecting, 2 = connected
 static std::atomic<int> g_state(0);
