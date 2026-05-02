@@ -1,0 +1,32 @@
+name: Build Mod
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        config:
+          - os: ubuntu-latest
+            target: Android
+          - os: windows-latest
+            target: Win
+
+    runs-on: ${{ matrix.config.os }}
+    name: Build ${{ matrix.config.target }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Geode
+        uses: geode-sdk/build-geode-mod/setup@main
+
+      - name: Build
+        uses: geode-sdk/build-geode-mod@main
+        with:
+          target: ${{ matrix.config.target }}
+          export-pdb: true
