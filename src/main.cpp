@@ -1,38 +1,35 @@
 #include <Geode/Geode.hpp>
 #include <Geode/modify/MenuLayer.hpp>
-#include <Geode/modify/PlayLayer.hpp>
 #include <thread>
 #include <atomic>
-#include <vector>
+#include <string>
 
-#ifdef GEODE_IS_ANDROID
-#include <SLES/OpenSLES.h>
-#include <SLES/OpenSLES_Android.h>
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#pragma comment(lib, "ws2_32.lib")
 #else
-#include <AL/al.h>
-#include <AL/alc.h>
-#endif
-
-// WebSocket через системний сокет
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <unistd.h>
+#endif
 
 using namespace geode::prelude;
 
 #define SERVER_HOST "gd-voicechat-server-production.up.railway.app"
-#define SERVER_PORT 8080
-#define SAMPLE_RATE 16000
-#define BUFFER_SIZE 1024
+#define SERVER_PORT 80
 
 static std::atomic<bool> g_connected(false);
-static std::atomic<bool> g_talking(false);
 static int g_socket = -1;
 
-// Простий WebSocket handshake
 bool connectToServer() {
+    #ifdef _WIN32
+    WSADATA wsa;
+    WSAStartup(MAKEWORD(2,2), &wsa);
+    #endif
+
     struct addrinfo hints{}, *res;
     hints.ai_family = AF_INET;
     hints.ai_socktype = SOCK_STREAM;
@@ -41,10 +38,18 @@ bool connectToServer() {
         return false;
 
     g_socket = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-    if (g_socket < 0) return false;
+    if (g_socket < 0) {
+        freeaddrinfo(res);
+        return false;
+    }
 
     if (connect(g_socket, res->ai_addr, res->ai_addrlen) < 0) {
+        #ifdef _WIN32
+        closesocket(g_socket);
+        #else
         close(g_socket);
+        #endif
+        freeaddrinfo(res);
         return false;
     }
 
@@ -59,58 +64,41 @@ bool connectToServer() {
 
     send(g_socket, handshake.c_str(), handshake.size(), 0);
 
-    char buf[512];
-    recv(g_socket, buf, sizeof(buf), 0);
+    char buf[512] = {};
+    recv(g_socket, buf, sizeof(buf) - 1, 0);
 
     freeaddrinfo(res);
     g_connected = true;
     return true;
 }
 
-void sendAudio(const std::vector<uint8_t>& data) {
-    if (!g_connected || g_socket < 0) return;
-
-    // WebSocket frame (binary)
-    std::vector<uint8_t> frame;
-    frame.push_back(0x82); // FIN + binary opcode
-
-    if (data.size() < 126) {
-        frame.push_back(0x80 | data.size()); // masked
-    } else {
-        frame.push_back(0x80 | 126);
-        frame.push_back((data.size() >> 8) & 0xFF);
-        frame.push_back(data.size() & 0xFF);
+void disconnectFromServer() {
+    if (g_socket >= 0) {
+        #ifdef _WIN32
+        closesocket(g_socket);
+        #else
+        close(g_socket);
+        #endif
+        g_socket = -1;
     }
-
-    // Маска
-    uint8_t mask[4] = {0x12, 0x34, 0x56, 0x78};
-    frame.insert(frame.end(), mask, mask + 4);
-
-    for (size_t i = 0; i < data.size(); i++)
-        frame.push_back(data[i] ^ mask[i % 4]);
-
-    send(g_socket, frame.data(), frame.size(), 0);
+    g_connected = false;
 }
 
-// Кнопка войсчату в меню
-class $modify(MenuLayer) {
+class $modify(VCMenuLayer, MenuLayer) {
     bool init() {
         if (!MenuLayer::init()) return false;
 
-        auto spr = CCSprite::createWithSpriteFrameName("GJ_deleteSoundBtn_001.png");
-        if (!spr) spr = CCSprite::create();
-        spr->setScale(0.9f);
-
         auto btn = CCMenuItemSpriteExtra::create(
-            spr, this,
-            menu_selector(MenuLayer::onVoiceChat)
+            CCSprite::createWithSpriteFrameName("GJ_deleteSoundBtn_001.png"),
+            this,
+            menu_selector(VCMenuLayer::onVoiceChat)
         );
         btn->setID("voicechat-btn");
 
         auto menu = this->getChildByID("bottom-menu");
         if (menu) {
-            menu->addChild(btn);
-            menu->updateLayout();
+            static_cast<CCMenu*>(menu)->addChild(btn);
+            static_cast<CCMenu*>(menu)->updateLayout();
         }
 
         return true;
@@ -120,17 +108,23 @@ class $modify(MenuLayer) {
         if (!g_connected) {
             std::thread([]() {
                 if (connectToServer()) {
-                    log::info("VoiceChat connected!");
+                    log::info("VoiceChat: connected to server!");
                 } else {
-                    log::error("VoiceChat connection failed!");
+                    log::error("VoiceChat: failed to connect!");
                 }
             }).detach();
-            FLAlertLayer::create("VoiceChat", "Connecting to server...", "OK")->show();
+            FLAlertLayer::create(
+                "VoiceChat",
+                "Connecting to server...",
+                "OK"
+            )->show();
         } else {
-            close(g_socket);
-            g_socket = -1;
-            g_connected = false;
-            FLAlertLayer::create("VoiceChat", "Disconnected!", "OK")->show();
+            disconnectFromServer();
+            FLAlertLayer::create(
+                "VoiceChat",
+                "Disconnected!",
+                "OK"
+            )->show();
         }
     }
 };
