@@ -19,7 +19,7 @@
 using namespace geode::prelude;
 
 #define SERVER_HOST "gd-voicechat-server-production.up.railway.app"
-#define SERVER_PORT 80
+#define SERVER_PORT 443
 
 static std::atomic<bool> g_connected(false);
 static int g_socket = -1;
