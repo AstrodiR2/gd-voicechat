@@ -25,4 +25,9 @@ endif()
 add_subdirectory($ENV{GEODE_SDK} ${CMAKE_CURRENT_BINARY_DIR}/geode)
 
 target_link_libraries(${PROJECT_NAME} geode-sdk)
+
+if (ANDROID)
+    target_link_libraries(${PROJECT_NAME} OpenSLES)
+endif()
+
 setup_geode_mod(${PROJECT_NAME})
