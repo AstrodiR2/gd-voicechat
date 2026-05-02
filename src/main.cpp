@@ -19,7 +19,6 @@ using namespace geode::prelude;
 
 #define SERVER_HOST "tramway.proxy.rlwy.net"
 #define SERVER_PORT 16282
-#define SAMPLE_RATE 16000
 #define FRAMES_PER_BUFFER 1024
 
 static std::atomic<int> g_state(0);
@@ -32,13 +31,10 @@ static SLEngineItf g_engine = nullptr;
 static SLObjectItf g_recorderObj = nullptr;
 static SLRecordItf g_recorder = nullptr;
 static SLAndroidSimpleBufferQueueItf g_recorderQueue = nullptr;
-
 static std::vector<short> g_audioBuffer(FRAMES_PER_BUFFER);
 
 void sendAudioFrame(const std::vector<short>& data) {
     if (g_socket < 0) return;
-
-    // WebSocket binary frame
     std::vector<uint8_t> frame;
     size_t len = data.size() * 2;
     frame.push_back(0x82);
@@ -54,7 +50,6 @@ void sendAudioFrame(const std::vector<short>& data) {
     const uint8_t* raw = reinterpret_cast<const uint8_t*>(data.data());
     for (size_t i = 0; i < len; i++)
         frame.push_back(raw[i] ^ mask[i % 4]);
-
     send(g_socket, frame.data(), frame.size(), 0);
 }
 
@@ -66,9 +61,16 @@ void recordCallback(SLAndroidSimpleBufferQueueItf bq, void* context) {
 }
 
 bool startRecording() {
-    slCreateEngine(&g_engineObj, 0, nullptr, 0, nullptr, nullptr);
-    (*g_engineObj)->Realize(g_engineObj, SL_BOOLEAN_FALSE);
-    (*g_engineObj)->GetInterface(g_engineObj, SL_IID_ENGINE, &g_engine);
+    SLresult result;
+
+    result = slCreateEngine(&g_engineObj, 0, nullptr, 0, nullptr, nullptr);
+    if (result != SL_RESULT_SUCCESS) return false;
+
+    result = (*g_engineObj)->Realize(g_engineObj, SL_BOOLEAN_FALSE);
+    if (result != SL_RESULT_SUCCESS) return false;
+
+    result = (*g_engineObj)->GetInterface(g_engineObj, SL_IID_ENGINE, &g_engine);
+    if (result != SL_RESULT_SUCCESS) return false;
 
     SLDataLocator_IODevice loc = {
         SL_DATALOCATOR_IODEVICE,
@@ -94,16 +96,46 @@ bool startRecording() {
     const SLInterfaceID ids[] = {SL_IID_ANDROIDSIMPLEBUFFERQUEUE};
     const SLboolean req[] = {SL_BOOLEAN_TRUE};
 
-    (*g_engine)->CreateAudioRecorder(g_engine, &g_recorderObj, &src, &sink, 1, ids, req);
-    (*g_recorderObj)->Realize(g_recorderObj, SL_BOOLEAN_FALSE);
-    (*g_recorderObj)->GetInterface(g_recorderObj, SL_IID_RECORD, &g_recorder);
-    (*g_recorderObj)->GetInterface(g_recorderObj, SL_IID_ANDROIDSIMPLEBUFFERQUEUE, &g_recorderQueue);
+    result = (*g_engine)->CreateAudioRecorder(
+        g_engine, &g_recorderObj, &src, &sink, 1, ids, req
+    );
+    if (result != SL_RESULT_SUCCESS) {
+        log::error("VoiceChat: CreateAudioRecorder failed: {}", result);
+        return false;
+    }
 
-    (*g_recorderQueue)->RegisterCallback(g_recorderQueue, recordCallback, nullptr);
-    (*g_recorderQueue)->Enqueue(g_recorderQueue, g_audioBuffer.data(), g_audioBuffer.size() * 2);
-    (*g_recorder)->SetRecordState(g_recorder, SL_RECORDSTATE_RECORDING);
+    result = (*g_recorderObj)->Realize(g_recorderObj, SL_BOOLEAN_FALSE);
+    if (result != SL_RESULT_SUCCESS) return false;
+
+    result = (*g_recorderObj)->GetInterface(
+        g_recorderObj, SL_IID_RECORD, &g_recorder
+    );
+    if (result != SL_RESULT_SUCCESS) return false;
+
+    result = (*g_recorderObj)->GetInterface(
+        g_recorderObj, SL_IID_ANDROIDSIMPLEBUFFERQUEUE, &g_recorderQueue
+    );
+    if (result != SL_RESULT_SUCCESS) return false;
+
+    result = (*g_recorderQueue)->RegisterCallback(
+        g_recorderQueue, recordCallback, nullptr
+    );
+    if (result != SL_RESULT_SUCCESS) return false;
+
+    result = (*g_recorderQueue)->Enqueue(
+        g_recorderQueue,
+        g_audioBuffer.data(),
+        g_audioBuffer.size() * 2
+    );
+    if (result != SL_RESULT_SUCCESS) return false;
+
+    result = (*g_recorder)->SetRecordState(
+        g_recorder, SL_RECORDSTATE_RECORDING
+    );
+    if (result != SL_RESULT_SUCCESS) return false;
 
     g_recording = true;
+    log::info("VoiceChat: recording started!");
     return true;
 }
 
@@ -119,6 +151,9 @@ void stopRecording() {
         (*g_engineObj)->Destroy(g_engineObj);
         g_engineObj = nullptr;
     }
+    g_recorder = nullptr;
+    g_engine = nullptr;
+    g_recorderQueue = nullptr;
 }
 #endif
 
@@ -193,10 +228,10 @@ class $modify(VCMenuLayer, MenuLayer) {
 #ifdef GEODE_IS_ANDROID
                     startRecording();
 #endif
-                    log::info("VoiceChat: connected + recording!");
+                    log::info("VoiceChat: connected!");
                 } else {
                     g_state = 0;
-                    log::error("VoiceChat: failed!");
+                    log::error("VoiceChat: failed to connect!");
                 }
             }).detach();
             FLAlertLayer::create("VoiceChat", "Connecting...", "OK")->show();
