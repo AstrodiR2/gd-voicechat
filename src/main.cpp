@@ -11,7 +11,8 @@
 #include <unistd.h>
 
 #ifdef GEODE_IS_ANDROID
-#include <aaudio/AAudio.h>
+#include <SLES/OpenSLES.h>
+#include <SLES/OpenSLES_Android.h>
 #endif
 
 using namespace geode::prelude;
@@ -25,13 +26,17 @@ static int g_socket = -1;
 static std::atomic<bool> g_recording(false);
 
 #ifdef GEODE_IS_ANDROID
-static AAudioStream* g_audioStream = nullptr;
-static std::vector<int16_t> g_audioBuffer(FRAMES_PER_BUFFER);
+static SLObjectItf g_engineObj = nullptr;
+static SLEngineItf g_engine = nullptr;
+static SLObjectItf g_recorderObj = nullptr;
+static SLRecordItf g_recorder = nullptr;
+static SLAndroidSimpleBufferQueueItf g_recorderQueue = nullptr;
+static std::vector<short> g_audioBuffer(FRAMES_PER_BUFFER);
 
-void sendAudioFrame(const int16_t* data, int frames) {
+void sendAudioFrame(const std::vector<short>& data) {
     if (g_socket < 0) return;
-    size_t len = frames * 2;
     std::vector<uint8_t> frame;
+    size_t len = data.size() * 2;
     frame.push_back(0x82);
     if (len < 126) {
         frame.push_back(0x80 | (uint8_t)len);
@@ -42,70 +47,133 @@ void sendAudioFrame(const int16_t* data, int frames) {
     }
     uint8_t mask[4] = {0x12, 0x34, 0x56, 0x78};
     frame.insert(frame.end(), mask, mask + 4);
-    const uint8_t* raw = reinterpret_cast<const uint8_t*>(data);
+    const uint8_t* raw = reinterpret_cast<const uint8_t*>(data.data());
     for (size_t i = 0; i < len; i++)
         frame.push_back(raw[i] ^ mask[i % 4]);
     send(g_socket, frame.data(), frame.size(), 0);
 }
 
-aaudio_data_callback_result_t audioCallback(
-    AAudioStream* stream,
-    void* userData,
-    void* audioData,
-    int32_t numFrames
-) {
+void recordCallback(SLAndroidSimpleBufferQueueItf bq, void* context) {
     if (g_recording && g_socket >= 0) {
-        sendAudioFrame(reinterpret_cast<int16_t*>(audioData), numFrames);
+        sendAudioFrame(g_audioBuffer);
     }
-    return AAUDIO_CALLBACK_RESULT_CONTINUE;
+    (*bq)->Enqueue(bq, g_audioBuffer.data(), g_audioBuffer.size() * 2);
 }
 
 bool startRecording() {
-    AAudioStreamBuilder* builder = nullptr;
-    aaudio_result_t result;
+    SLresult result;
 
-    result = AAudio_createStreamBuilder(&builder);
-    if (result != AAUDIO_OK) {
-        log::error("VoiceChat: createStreamBuilder failed: {}", result);
+    result = slCreateEngine(&g_engineObj, 0, nullptr, 0, nullptr, nullptr);
+    if (result != SL_RESULT_SUCCESS) {
+        log::error("VoiceChat: slCreateEngine failed");
         return false;
     }
 
-    AAudioStreamBuilder_setDirection(builder, AAUDIO_DIRECTION_INPUT);
-    AAudioStreamBuilder_setSampleRate(builder, 16000);
-    AAudioStreamBuilder_setChannelCount(builder, 1);
-    AAudioStreamBuilder_setFormat(builder, AAUDIO_FORMAT_PCM_I16);
-    AAudioStreamBuilder_setFramesPerDataCallback(builder, FRAMES_PER_BUFFER);
-    AAudioStreamBuilder_setDataCallback(builder, audioCallback, nullptr);
-    AAudioStreamBuilder_setInputPreset(builder, AAUDIO_INPUT_PRESET_VOICE_COMMUNICATION);
-
-    result = AAudioStreamBuilder_openStream(builder, &g_audioStream);
-    AAudioStreamBuilder_delete(builder);
-
-    if (result != AAUDIO_OK) {
-        log::error("VoiceChat: openStream failed: {}", result);
+    result = (*g_engineObj)->Realize(g_engineObj, SL_BOOLEAN_FALSE);
+    if (result != SL_RESULT_SUCCESS) {
+        log::error("VoiceChat: Realize engine failed");
+        (*g_engineObj)->Destroy(g_engineObj);
+        g_engineObj = nullptr;
         return false;
     }
 
-    result = AAudioStream_requestStart(g_audioStream);
-    if (result != AAUDIO_OK) {
-        log::error("VoiceChat: requestStart failed: {}", result);
-        AAudioStream_close(g_audioStream);
-        g_audioStream = nullptr;
+    result = (*g_engineObj)->GetInterface(g_engineObj, SL_IID_ENGINE, &g_engine);
+    if (result != SL_RESULT_SUCCESS) {
+        log::error("VoiceChat: GetInterface engine failed");
+        (*g_engineObj)->Destroy(g_engineObj);
+        g_engineObj = nullptr;
+        return false;
+    }
+
+    SLDataLocator_IODevice loc = {
+        SL_DATALOCATOR_IODEVICE,
+        SL_IODEVICE_AUDIOINPUT,
+        SL_DEFAULTDEVICEID_AUDIOINPUT,
+        nullptr
+    };
+    SLDataSource src = {&loc, nullptr};
+
+    SLDataLocator_AndroidSimpleBufferQueue bqLoc = {
+        SL_DATALOCATOR_ANDROIDSIMPLEBUFFERQUEUE, 2
+    };
+    SLDataFormat_PCM fmt = {
+        SL_DATAFORMAT_PCM, 1,
+        SL_SAMPLINGRATE_16,
+        SL_PCMSAMPLEFORMAT_FIXED_16,
+        SL_PCMSAMPLEFORMAT_FIXED_16,
+        SL_SPEAKER_FRONT_CENTER,
+        SL_BYTEORDER_LITTLEENDIAN
+    };
+    SLDataSink sink = {&bqLoc, &fmt};
+
+    const SLInterfaceID ids[] = {SL_IID_ANDROIDSIMPLEBUFFERQUEUE};
+    const SLboolean req[] = {SL_BOOLEAN_TRUE};
+
+    result = (*g_engine)->CreateAudioRecorder(
+        g_engine, &g_recorderObj, &src, &sink, 1, ids, req
+    );
+    if (result != SL_RESULT_SUCCESS) {
+        log::error("VoiceChat: CreateAudioRecorder failed: {} (no mic permission?)", result);
+        (*g_engineObj)->Destroy(g_engineObj);
+        g_engineObj = nullptr;
+        return false;
+    }
+
+    result = (*g_recorderObj)->Realize(g_recorderObj, SL_BOOLEAN_FALSE);
+    if (result != SL_RESULT_SUCCESS) {
+        log::error("VoiceChat: Realize recorder failed");
+        (*g_recorderObj)->Destroy(g_recorderObj);
+        g_recorderObj = nullptr;
+        (*g_engineObj)->Destroy(g_engineObj);
+        g_engineObj = nullptr;
+        return false;
+    }
+
+    result = (*g_recorderObj)->GetInterface(g_recorderObj, SL_IID_RECORD, &g_recorder);
+    if (result != SL_RESULT_SUCCESS) {
+        log::error("VoiceChat: GetInterface recorder failed");
+        return false;
+    }
+
+    result = (*g_recorderObj)->GetInterface(
+        g_recorderObj, SL_IID_ANDROIDSIMPLEBUFFERQUEUE, &g_recorderQueue
+    );
+    if (result != SL_RESULT_SUCCESS) {
+        log::error("VoiceChat: GetInterface queue failed");
+        return false;
+    }
+
+    (*g_recorderQueue)->RegisterCallback(g_recorderQueue, recordCallback, nullptr);
+    (*g_recorderQueue)->Enqueue(
+        g_recorderQueue, g_audioBuffer.data(), g_audioBuffer.size() * 2
+    );
+
+    result = (*g_recorder)->SetRecordState(g_recorder, SL_RECORDSTATE_RECORDING);
+    if (result != SL_RESULT_SUCCESS) {
+        log::error("VoiceChat: SetRecordState failed");
         return false;
     }
 
     g_recording = true;
-    log::info("VoiceChat: AAudio recording started!");
+    log::info("VoiceChat: recording started!");
     return true;
 }
 
 void stopRecording() {
     g_recording = false;
-    if (g_audioStream) {
-        AAudioStream_requestStop(g_audioStream);
-        AAudioStream_close(g_audioStream);
-        g_audioStream = nullptr;
+    if (g_recorder)
+        (*g_recorder)->SetRecordState(g_recorder, SL_RECORDSTATE_STOPPED);
+    if (g_recorderObj) {
+        (*g_recorderObj)->Destroy(g_recorderObj);
+        g_recorderObj = nullptr;
     }
+    if (g_engineObj) {
+        (*g_engineObj)->Destroy(g_engineObj);
+        g_engineObj = nullptr;
+    }
+    g_recorder = nullptr;
+    g_engine = nullptr;
+    g_recorderQueue = nullptr;
 }
 #endif
 
@@ -178,7 +246,9 @@ class $modify(VCMenuLayer, MenuLayer) {
                 if (connectToServer()) {
                     g_state = 2;
 #ifdef GEODE_IS_ANDROID
-                    startRecording();
+                    if (!startRecording()) {
+                        log::error("VoiceChat: mic failed - check permissions!");
+                    }
 #endif
                     log::info("VoiceChat: connected!");
                 } else {
