@@ -1,5 +1,7 @@
 #include <Geode/Geode.hpp>
 #include <Geode/modify/MenuLayer.hpp>
+#include <Geode/modify/PauseLayer.hpp>
+#include <Geode/ui/Popup.hpp>
 #include <thread>
 #include <atomic>
 #include <string>
@@ -26,6 +28,7 @@ static std::atomic<int> g_state(0);
 static int g_socket = -1;
 static std::atomic<bool> g_recording(false);
 static std::atomic<bool> g_playing(false);
+static std::atomic<bool> g_micMuted(false);
 
 #ifdef GEODE_IS_ANDROID
 static SLObjectItf g_engineObj = nullptr;
@@ -41,7 +44,7 @@ static SLAndroidSimpleBufferQueueItf g_playerQueue = nullptr;
 static std::vector<short> g_playBuffer(FRAMES_PER_BUFFER);
 
 void sendAudioFrame(const std::vector<short>& data) {
-    if (g_socket < 0) return;
+    if (g_socket < 0 || g_micMuted) return;
     std::vector<uint8_t> frame;
     size_t len = data.size() * 2;
     frame.push_back(0x82);
@@ -179,71 +182,114 @@ void disconnectFromServer() {
 #endif
     if (g_socket >= 0) { close(g_socket); g_socket = -1; }
     g_state = 0;
+    g_micMuted = false;
 }
 
-// ===== UI ПАНЕЛЬ В СТИЛІ GLOBED =====
-class VoiceChatPanel : public CCNode {
+// ===== ГОЛОВНИЙ ПОПАП =====
+class VoiceChatPopup : public Popup<> {
 public:
     CCLabelBMFont* m_statusLabel = nullptr;
-    CCMenuItemSpriteExtra* m_disconnectBtn = nullptr;
+    CCLabelBMFont* m_micLabel = nullptr;
 
-    static VoiceChatPanel* create() {
-        auto ret = new VoiceChatPanel();
-        if (ret->init()) { ret->autorelease(); return ret; }
-        delete ret; return nullptr;
+    static VoiceChatPopup* create() {
+        auto ret = new VoiceChatPopup();
+        if (ret->initAnchored(280, 180)) {
+            ret->autorelease();
+            return ret;
+        }
+        delete ret;
+        return nullptr;
     }
 
-    bool init() {
-        if (!CCNode::init()) return false;
+    bool setup() override {
+        this->setTitle("VoiceChat");
 
-        // Темна панель як в Globed
-        auto bg = CCScale9Sprite::create("square02_small.png");
-        bg->setContentSize({200, 50});
-        bg->setColor({0, 0, 0});
-        bg->setOpacity(180);
-        bg->setPosition({100, 25});
-        this->addChild(bg);
+        auto winSize = m_mainLayer->getContentSize();
 
-        // Зелена крапка статусу
-        auto dot = CCSprite::createWithSpriteFrameName("gj_heartOn_001.png");
-        if (!dot) dot = CCSprite::create();
-        dot->setColor({0, 255, 0});
-        dot->setScale(0.4f);
-        dot->setPosition({20, 25});
-        this->addChild(dot);
-
-        // Текст статусу
-        m_statusLabel = CCLabelBMFont::create("Connected!", "bigFont.fnt");
-        m_statusLabel->setScale(0.35f);
-        m_statusLabel->setPosition({100, 32});
-        m_statusLabel->setColor({255, 255, 255});
-        this->addChild(m_statusLabel);
-
-        // Підпис VoiceChat
-        auto subLabel = CCLabelBMFont::create("VoiceChat", "goldFont.fnt");
-        subLabel->setScale(0.25f);
-        subLabel->setPosition({100, 16});
-        subLabel->setColor({150, 220, 255});
-        this->addChild(subLabel);
-
-        // Кнопка виходу (X)
-        auto exitSpr = CCSprite::createWithSpriteFrameName("GJ_closeBtn_001.png");
-        exitSpr->setScale(0.7f);
-        auto menu = CCMenu::create();
-        menu->setPosition({185, 38});
-        m_disconnectBtn = CCMenuItemSpriteExtra::create(
-            exitSpr, this,
-            menu_selector(VoiceChatPanel::onDisconnect)
+        // Статус
+        m_statusLabel = CCLabelBMFont::create(
+            g_state == 2 ? "● Connected" : "● Disconnected",
+            "bigFont.fnt"
         );
-        menu->addChild(m_disconnectBtn);
-        this->addChild(menu);
+        m_statusLabel->setScale(0.45f);
+        m_statusLabel->setColor(g_state == 2 ? ccColor3B{0, 255, 100} : ccColor3B{255, 80, 80});
+        m_statusLabel->setPosition({winSize.width / 2, winSize.height - 55});
+        m_mainLayer->addChild(m_statusLabel);
 
-        this->setContentSize({200, 50});
+        auto menu = CCMenu::create();
+        menu->setPosition({0, 0});
+        m_mainLayer->addChild(menu);
+
+        if (g_state == 2) {
+            // Кнопка мікрофону
+            m_micLabel = CCLabelBMFont::create(
+                g_micMuted ? "🎤 Mic: OFF" : "🎤 Mic: ON",
+                "bigFont.fnt"
+            );
+            m_micLabel->setScale(0.4f);
+
+            auto micBtn = CCMenuItemSpriteExtra::create(
+                m_micLabel, this,
+                menu_selector(VoiceChatPopup::onToggleMic)
+            );
+            micBtn->setPosition({winSize.width / 2, winSize.height / 2 + 10});
+            menu->addChild(micBtn);
+
+            // Кнопка відключитись
+            auto disconnectSpr = ButtonSprite::create("Disconnect", "goldFont.fnt", "GJ_button_06.png", 0.8f);
+            auto disconnectBtn = CCMenuItemSpriteExtra::create(
+                disconnectSpr, this,
+                menu_selector(VoiceChatPopup::onDisconnect)
+            );
+            disconnectBtn->setPosition({winSize.width / 2, winSize.height / 2 - 35});
+            menu->addChild(disconnectBtn);
+        } else {
+            // Кнопка підключитись
+            auto connectSpr = ButtonSprite::create("Connect", "goldFont.fnt", "GJ_button_01.png", 0.8f);
+            auto connectBtn = CCMenuItemSpriteExtra::create(
+                connectSpr, this,
+                menu_selector(VoiceChatPopup::onConnect)
+            );
+            connectBtn->setPosition({winSize.width / 2, winSize.height / 2});
+            menu->addChild(connectBtn);
+        }
+
         return true;
     }
 
+    void onToggleMic(CCObject*) {
+        g_micMuted = !g_micMuted;
+        m_micLabel->setString(g_micMuted ? "Mic: OFF" : "Mic: ON");
+        m_micLabel->setColor(g_micMuted ? ccColor3B{255, 80, 80} : ccColor3B{0, 255, 100});
+    }
+
+    void onConnect(CCObject*) {
+        if (g_state != 0) return;
+        g_state = 1;
+        m_statusLabel->setString("Connecting...");
+        m_statusLabel->setColor({255, 200, 0});
+
+        std::thread([this]() {
+            if (connectToServer()) {
+                g_state = 2;
+#ifdef GEODE_IS_ANDROID
+                startRecording();
+#endif
+                Loader::get()->queueInMainThread([this]() {
+                    this->onClose(nullptr);
+                    VoiceChatPopup::create()->show();
+                });
+            } else {
+                g_state = 0;
+                Loader::get()->queueInMainThread([this]() {
+                    m_statusLabel->setString("Failed!");
+                    m_statusLabel->setColor({255, 80, 80});
+                });
+            }
+        }).detach();
+    }
+
     void onDisconnect(CCObject*) {
-        // Підтвердження виходу як в Globed
         createQuickPopup(
             "Disconnect",
             "Are you sure you want to\ndisconnect from VoiceChat?",
@@ -251,13 +297,60 @@ public:
             [this](auto, bool confirm) {
                 if (confirm) {
                     disconnectFromServer();
-                    this->removeFromParent();
+                    this->onClose(nullptr);
+                    VoiceChatPopup::create()->show();
                 }
             }
         );
     }
 };
 
+// ===== КНОПКА МІК НА ПАУЗІ =====
+class $modify(VCPauseLayer, PauseLayer) {
+    bool init(bool p0) {
+        if (!PauseLayer::init(p0)) return false;
+
+        if (g_state != 2) return true;
+
+        auto spr = CCSprite::createWithSpriteFrameName(
+            g_micMuted ? "GJ_button_06.png" : "GJ_button_01.png"
+        );
+
+        auto label = CCLabelBMFont::create(
+            g_micMuted ? "Mic OFF" : "Mic ON",
+            "bigFont.fnt"
+        );
+        label->setScale(0.4f);
+
+        auto btn = CCMenuItemSpriteExtra::create(
+            label, this,
+            menu_selector(VCPauseLayer::onToggleMic)
+        );
+        btn->setID("vc-mic-btn");
+
+        auto menu = CCMenu::create();
+        menu->setPosition({
+            CCDirector::get()->getWinSize().width - 60,
+            CCDirector::get()->getWinSize().height - 30
+        });
+        menu->addChild(btn);
+        this->addChild(menu, 100);
+
+        return true;
+    }
+
+    void onToggleMic(CCObject*) {
+        g_micMuted = !g_micMuted;
+        // Перезавантажуємо кнопку
+        if (auto menu = this->getChildByID("vc-mic-btn")) {
+            auto lbl = static_cast<CCLabelBMFont*>(menu);
+            lbl->setString(g_micMuted ? "Mic OFF" : "Mic ON");
+            lbl->setColor(g_micMuted ? ccColor3B{255, 80, 80} : ccColor3B{0, 255, 100});
+        }
+    }
+};
+
+// ===== КНОПКА В ГОЛОВНОМУ МЕНЮ =====
 class $modify(VCMenuLayer, MenuLayer) {
     bool init() {
         if (!MenuLayer::init()) return false;
@@ -278,52 +371,6 @@ class $modify(VCMenuLayer, MenuLayer) {
     }
 
     void onVoiceChat(CCObject*) {
-        if (g_state == 1) {
-            FLAlertLayer::create("VoiceChat", "Still connecting...", "OK")->show();
-            return;
-        }
-        if (g_state == 0) {
-            g_state = 1;
-
-            // Показуємо "Connecting..." панель
-            auto connectingLabel = CCLabelBMFont::create("Connecting...", "bigFont.fnt");
-            connectingLabel->setScale(0.5f);
-            connectingLabel->setPosition(CCDirector::get()->getWinSize() / 2);
-            connectingLabel->setTag(999);
-            this->addChild(connectingLabel, 100);
-
-            std::thread([this]() {
-                if (connectToServer()) {
-                    g_state = 2;
-#ifdef GEODE_IS_ANDROID
-                    startRecording();
-#endif
-                    // Показуємо панель в головному потоці
-                    Loader::get()->queueInMainThread([this]() {
-                        // Прибираємо "Connecting..."
-                        if (auto lbl = this->getChildByTag(999))
-                            lbl->removeFromParent();
-
-                        // Додаємо панель в стилі Globed
-                        auto panel = VoiceChatPanel::create();
-                        panel->setPosition({10, CCDirector::get()->getWinSize().height - 60});
-                        panel->setID("vc-panel");
-                        this->addChild(panel, 100);
-                    });
-                } else {
-                    g_state = 0;
-                    Loader::get()->queueInMainThread([this]() {
-                        if (auto lbl = this->getChildByTag(999))
-                            lbl->removeFromParent();
-                        FLAlertLayer::create("VoiceChat", "Failed to connect!", "OK")->show();
-                    });
-                }
-            }).detach();
-        } else if (g_state == 2) {
-            // Вже підключений — показуємо підтвердження
-            if (auto panel = this->getChildByID("vc-panel")) {
-                static_cast<VoiceChatPanel*>(panel)->onDisconnect(nullptr);
-            }
-        }
+        VoiceChatPopup::create()->show();
     }
 };
