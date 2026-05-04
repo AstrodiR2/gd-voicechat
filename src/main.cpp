@@ -1,7 +1,6 @@
 #include <Geode/Geode.hpp>
 #include <Geode/modify/MenuLayer.hpp>
 #include <Geode/modify/PauseLayer.hpp>
-#include <Geode/ui/Popup.hpp>
 #include <thread>
 #include <atomic>
 #include <string>
@@ -185,15 +184,14 @@ void disconnectFromServer() {
     g_micMuted = false;
 }
 
-// ===== ГОЛОВНИЙ ПОПАП =====
-class VoiceChatPopup : public Popup<> {
+// ===== ПОПАП через FLAlertLayer =====
+class VoiceChatPopup : public FLAlertLayer {
 public:
     CCLabelBMFont* m_statusLabel = nullptr;
-    CCMenuItemSpriteExtra* m_micBtn = nullptr;
 
     static VoiceChatPopup* create() {
         auto ret = new VoiceChatPopup();
-        if (ret->initAnchored(280, 200)) {
+        if (ret->init()) {
             ret->autorelease();
             return ret;
         }
@@ -201,27 +199,30 @@ public:
         return nullptr;
     }
 
-    bool setup() override {
-        this->setTitle("VoiceChat");
+    bool init() {
+        if (!FLAlertLayer::init(nullptr, "VoiceChat", "", "Close", nullptr, 280.f)) return false;
 
-        auto winSize = m_mainLayer->getContentSize();
-        auto menu = CCMenu::create();
-        menu->setPosition({0, 0});
-        m_mainLayer->addChild(menu);
+        auto winSize = CCDirector::get()->getWinSize();
+        auto bg = m_mainLayer;
 
         // Статус
         m_statusLabel = CCLabelBMFont::create(
-            g_state == 2 ? "● Connected" : (g_state == 1 ? "● Connecting..." : "● Disconnected"),
+            g_state == 2 ? "Connected!" :
+            g_state == 1 ? "Connecting..." : "Disconnected",
             "bigFont.fnt"
         );
-        m_statusLabel->setScale(0.45f);
+        m_statusLabel->setScale(0.5f);
         m_statusLabel->setColor(
             g_state == 2 ? ccColor3B{0, 255, 100} :
             g_state == 1 ? ccColor3B{255, 200, 0} :
             ccColor3B{255, 80, 80}
         );
-        m_statusLabel->setPosition({winSize.width / 2, winSize.height - 55});
-        m_mainLayer->addChild(m_statusLabel);
+        m_statusLabel->setPosition({winSize.width / 2, winSize.height / 2 + 40});
+        bg->addChild(m_statusLabel);
+
+        auto menu = CCMenu::create();
+        menu->setPosition({0, 0});
+        bg->addChild(menu);
 
         if (g_state == 2) {
             // Кнопка мікрофону
@@ -231,64 +232,52 @@ public:
                 g_micMuted ? "GJ_button_06.png" : "GJ_button_01.png",
                 0.8f
             );
-            m_micBtn = CCMenuItemSpriteExtra::create(
+            auto micBtn = CCMenuItemSpriteExtra::create(
                 micSpr, this,
                 menu_selector(VoiceChatPopup::onToggleMic)
             );
-            m_micBtn->setPosition({winSize.width / 2, winSize.height / 2 + 15});
-            menu->addChild(m_micBtn);
+            micBtn->setPosition({winSize.width / 2, winSize.height / 2 + 5});
+            menu->addChild(micBtn);
 
             // Кнопка відключитись
-            auto disconnectSpr = ButtonSprite::create(
+            auto discSpr = ButtonSprite::create(
                 "Disconnect", "bigFont.fnt", "GJ_button_06.png", 0.8f
             );
-            auto disconnectBtn = CCMenuItemSpriteExtra::create(
-                disconnectSpr, this,
+            auto discBtn = CCMenuItemSpriteExtra::create(
+                discSpr, this,
                 menu_selector(VoiceChatPopup::onDisconnect)
             );
-            disconnectBtn->setPosition({winSize.width / 2, winSize.height / 2 - 30});
-            menu->addChild(disconnectBtn);
+            discBtn->setPosition({winSize.width / 2, winSize.height / 2 - 35});
+            menu->addChild(discBtn);
 
         } else if (g_state == 0) {
-            // Кнопка підключитись
-            auto connectSpr = ButtonSprite::create(
+            auto connSpr = ButtonSprite::create(
                 "Connect", "bigFont.fnt", "GJ_button_01.png", 0.8f
             );
-            auto connectBtn = CCMenuItemSpriteExtra::create(
-                connectSpr, this,
+            auto connBtn = CCMenuItemSpriteExtra::create(
+                connSpr, this,
                 menu_selector(VoiceChatPopup::onConnect)
             );
-            connectBtn->setPosition({winSize.width / 2, winSize.height / 2});
-            menu->addChild(connectBtn);
+            connBtn->setPosition({winSize.width / 2, winSize.height / 2});
+            menu->addChild(connBtn);
         }
 
         return true;
     }
 
-    void refreshUI() {
-        if (!m_statusLabel) return;
-        m_statusLabel->setString(
-            g_state == 2 ? "Connected!" :
-            g_state == 1 ? "Connecting..." : "Disconnected"
-        );
-        m_statusLabel->setColor(
-            g_state == 2 ? ccColor3B{0, 255, 100} :
-            g_state == 1 ? ccColor3B{255, 200, 0} :
-            ccColor3B{255, 80, 80}
-        );
-    }
-
     void onToggleMic(CCObject*) {
         g_micMuted = !g_micMuted;
-        refreshUI();
+        this->keyBackClicked();
+        VoiceChatPopup::create()->show();
     }
 
     void onConnect(CCObject*) {
         if (g_state != 0) return;
         g_state = 1;
-        m_statusLabel->setString("Connecting...");
-        m_statusLabel->setColor({255, 200, 0});
-
+        if (m_statusLabel) {
+            m_statusLabel->setString("Connecting...");
+            m_statusLabel->setColor({255, 200, 0});
+        }
         std::thread([this]() {
             if (connectToServer()) {
                 g_state = 2;
@@ -296,13 +285,16 @@ public:
                 startRecording();
 #endif
                 Loader::get()->queueInMainThread([this]() {
-                    refreshUI();
+                    this->keyBackClicked();
+                    VoiceChatPopup::create()->show();
                 });
             } else {
                 g_state = 0;
                 Loader::get()->queueInMainThread([this]() {
-                    m_statusLabel->setString("Failed!");
-                    m_statusLabel->setColor({255, 80, 80});
+                    if (m_statusLabel) {
+                        m_statusLabel->setString("Failed!");
+                        m_statusLabel->setColor({255, 80, 80});
+                    }
                 });
             }
         }).detach();
@@ -316,7 +308,8 @@ public:
             [this](auto, bool confirm) {
                 if (confirm) {
                     disconnectFromServer();
-                    refreshUI();
+                    this->keyBackClicked();
+                    VoiceChatPopup::create()->show();
                 }
             }
         );
@@ -383,7 +376,6 @@ class $modify(VCMenuLayer, MenuLayer) {
     }
 
     void onVoiceChat(CCObject*) {
-        auto popup = VoiceChatPopup::create();
-        CCScene::get()->addChild(popup);
+        VoiceChatPopup::create()->show();
     }
 };
