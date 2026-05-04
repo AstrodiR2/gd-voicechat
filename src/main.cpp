@@ -200,7 +200,7 @@ public:
     }
 
     bool init() {
-        if (!FLAlertLayer::init(nullptr, "VoiceChat", "", "Close", nullptr, 280.f)) return false;
+        if (!FLAlertLayer::init(nullptr, "VoiceChat", "", "Close", nullptr, 280.f, false, 200.f, 1.f)) return false;
 
         auto winSize = CCDirector::get()->getWinSize();
         auto bg = m_mainLayer;
