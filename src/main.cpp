@@ -266,19 +266,16 @@ public:
     }
 
     void refreshUI() {
+        if (!m_statusLabel) return;
         m_statusLabel->setString(
-            g_state == 2 ? "● Connected" :
-            g_state == 1 ? "● Connecting..." : "● Disconnected"
+            g_state == 2 ? "Connected!" :
+            g_state == 1 ? "Connecting..." : "Disconnected"
         );
         m_statusLabel->setColor(
             g_state == 2 ? ccColor3B{0, 255, 100} :
             g_state == 1 ? ccColor3B{255, 200, 0} :
             ccColor3B{255, 80, 80}
         );
-        if (m_micBtn) {
-            auto lbl = static_cast<ButtonSprite*>(m_micBtn->getNormalImage());
-            if (lbl) lbl->setString(g_micMuted ? "Mic: OFF" : "Mic: ON");
-        }
     }
 
     void onToggleMic(CCObject*) {
