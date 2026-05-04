@@ -265,10 +265,25 @@ public:
         return true;
     }
 
+    void refreshUI() {
+        m_statusLabel->setString(
+            g_state == 2 ? "● Connected" :
+            g_state == 1 ? "● Connecting..." : "● Disconnected"
+        );
+        m_statusLabel->setColor(
+            g_state == 2 ? ccColor3B{0, 255, 100} :
+            g_state == 1 ? ccColor3B{255, 200, 0} :
+            ccColor3B{255, 80, 80}
+        );
+        if (m_micBtn) {
+            auto lbl = static_cast<ButtonSprite*>(m_micBtn->getNormalImage());
+            if (lbl) lbl->setString(g_micMuted ? "Mic: OFF" : "Mic: ON");
+        }
+    }
+
     void onToggleMic(CCObject*) {
         g_micMuted = !g_micMuted;
-        this->removeFromParent();
-        VoiceChatPopup::create()->addToCurrentScene();
+        refreshUI();
     }
 
     void onConnect(CCObject*) {
@@ -284,8 +299,7 @@ public:
                 startRecording();
 #endif
                 Loader::get()->queueInMainThread([this]() {
-                    this->removeFromParent();
-                    VoiceChatPopup::create()->addToCurrentScene();
+                    refreshUI();
                 });
             } else {
                 g_state = 0;
@@ -305,8 +319,7 @@ public:
             [this](auto, bool confirm) {
                 if (confirm) {
                     disconnectFromServer();
-                    this->removeFromParent();
-                    VoiceChatPopup::create()->addToCurrentScene();
+                    refreshUI();
                 }
             }
         );
@@ -373,6 +386,7 @@ class $modify(VCMenuLayer, MenuLayer) {
     }
 
     void onVoiceChat(CCObject*) {
-        VoiceChatPopup::create()->addToCurrentScene();
+        auto popup = VoiceChatPopup::create();
+        CCScene::get()->addChild(popup);
     }
 };
