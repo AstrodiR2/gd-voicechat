@@ -189,11 +189,11 @@ void disconnectFromServer() {
 class VoiceChatPopup : public Popup<> {
 public:
     CCLabelBMFont* m_statusLabel = nullptr;
-    CCLabelBMFont* m_micLabel = nullptr;
+    CCMenuItemSpriteExtra* m_micBtn = nullptr;
 
     static VoiceChatPopup* create() {
         auto ret = new VoiceChatPopup();
-        if (ret->initAnchored(280, 180)) {
+        if (ret->initAnchored(280, 200)) {
             ret->autorelease();
             return ret;
         }
@@ -205,47 +205,55 @@ public:
         this->setTitle("VoiceChat");
 
         auto winSize = m_mainLayer->getContentSize();
-
-        // Статус
-        m_statusLabel = CCLabelBMFont::create(
-            g_state == 2 ? "● Connected" : "● Disconnected",
-            "bigFont.fnt"
-        );
-        m_statusLabel->setScale(0.45f);
-        m_statusLabel->setColor(g_state == 2 ? ccColor3B{0, 255, 100} : ccColor3B{255, 80, 80});
-        m_statusLabel->setPosition({winSize.width / 2, winSize.height - 55});
-        m_mainLayer->addChild(m_statusLabel);
-
         auto menu = CCMenu::create();
         menu->setPosition({0, 0});
         m_mainLayer->addChild(menu);
 
+        // Статус
+        m_statusLabel = CCLabelBMFont::create(
+            g_state == 2 ? "● Connected" : (g_state == 1 ? "● Connecting..." : "● Disconnected"),
+            "bigFont.fnt"
+        );
+        m_statusLabel->setScale(0.45f);
+        m_statusLabel->setColor(
+            g_state == 2 ? ccColor3B{0, 255, 100} :
+            g_state == 1 ? ccColor3B{255, 200, 0} :
+            ccColor3B{255, 80, 80}
+        );
+        m_statusLabel->setPosition({winSize.width / 2, winSize.height - 55});
+        m_mainLayer->addChild(m_statusLabel);
+
         if (g_state == 2) {
             // Кнопка мікрофону
-            m_micLabel = CCLabelBMFont::create(
-                g_micMuted ? "🎤 Mic: OFF" : "🎤 Mic: ON",
-                "bigFont.fnt"
+            auto micSpr = ButtonSprite::create(
+                g_micMuted ? "Mic: OFF" : "Mic: ON",
+                "bigFont.fnt",
+                g_micMuted ? "GJ_button_06.png" : "GJ_button_01.png",
+                0.8f
             );
-            m_micLabel->setScale(0.4f);
-
-            auto micBtn = CCMenuItemSpriteExtra::create(
-                m_micLabel, this,
+            m_micBtn = CCMenuItemSpriteExtra::create(
+                micSpr, this,
                 menu_selector(VoiceChatPopup::onToggleMic)
             );
-            micBtn->setPosition({winSize.width / 2, winSize.height / 2 + 10});
-            menu->addChild(micBtn);
+            m_micBtn->setPosition({winSize.width / 2, winSize.height / 2 + 15});
+            menu->addChild(m_micBtn);
 
             // Кнопка відключитись
-            auto disconnectSpr = ButtonSprite::create("Disconnect", "goldFont.fnt", "GJ_button_06.png", 0.8f);
+            auto disconnectSpr = ButtonSprite::create(
+                "Disconnect", "bigFont.fnt", "GJ_button_06.png", 0.8f
+            );
             auto disconnectBtn = CCMenuItemSpriteExtra::create(
                 disconnectSpr, this,
                 menu_selector(VoiceChatPopup::onDisconnect)
             );
-            disconnectBtn->setPosition({winSize.width / 2, winSize.height / 2 - 35});
+            disconnectBtn->setPosition({winSize.width / 2, winSize.height / 2 - 30});
             menu->addChild(disconnectBtn);
-        } else {
+
+        } else if (g_state == 0) {
             // Кнопка підключитись
-            auto connectSpr = ButtonSprite::create("Connect", "goldFont.fnt", "GJ_button_01.png", 0.8f);
+            auto connectSpr = ButtonSprite::create(
+                "Connect", "bigFont.fnt", "GJ_button_01.png", 0.8f
+            );
             auto connectBtn = CCMenuItemSpriteExtra::create(
                 connectSpr, this,
                 menu_selector(VoiceChatPopup::onConnect)
@@ -259,8 +267,8 @@ public:
 
     void onToggleMic(CCObject*) {
         g_micMuted = !g_micMuted;
-        m_micLabel->setString(g_micMuted ? "Mic: OFF" : "Mic: ON");
-        m_micLabel->setColor(g_micMuted ? ccColor3B{255, 80, 80} : ccColor3B{0, 255, 100});
+        this->keyBackClicked();
+        VoiceChatPopup::create()->show();
     }
 
     void onConnect(CCObject*) {
@@ -276,7 +284,7 @@ public:
                 startRecording();
 #endif
                 Loader::get()->queueInMainThread([this]() {
-                    this->onClose(nullptr);
+                    this->keyBackClicked();
                     VoiceChatPopup::create()->show();
                 });
             } else {
@@ -297,7 +305,7 @@ public:
             [this](auto, bool confirm) {
                 if (confirm) {
                     disconnectFromServer();
-                    this->onClose(nullptr);
+                    this->keyBackClicked();
                     VoiceChatPopup::create()->show();
                 }
             }
@@ -309,29 +317,25 @@ public:
 class $modify(VCPauseLayer, PauseLayer) {
     bool init(bool p0) {
         if (!PauseLayer::init(p0)) return false;
-
         if (g_state != 2) return true;
-
-        auto spr = CCSprite::createWithSpriteFrameName(
-            g_micMuted ? "GJ_button_06.png" : "GJ_button_01.png"
-        );
 
         auto label = CCLabelBMFont::create(
             g_micMuted ? "Mic OFF" : "Mic ON",
             "bigFont.fnt"
         );
-        label->setScale(0.4f);
+        label->setScale(0.45f);
+        label->setColor(g_micMuted ? ccColor3B{255, 80, 80} : ccColor3B{0, 255, 100});
+        label->setID("vc-mic-label");
 
         auto btn = CCMenuItemSpriteExtra::create(
             label, this,
             menu_selector(VCPauseLayer::onToggleMic)
         );
-        btn->setID("vc-mic-btn");
 
         auto menu = CCMenu::create();
         menu->setPosition({
-            CCDirector::get()->getWinSize().width - 60,
-            CCDirector::get()->getWinSize().height - 30
+            CCDirector::get()->getWinSize().width - 55,
+            CCDirector::get()->getWinSize().height - 25
         });
         menu->addChild(btn);
         this->addChild(menu, 100);
@@ -341,9 +345,7 @@ class $modify(VCPauseLayer, PauseLayer) {
 
     void onToggleMic(CCObject*) {
         g_micMuted = !g_micMuted;
-        // Перезавантажуємо кнопку
-        if (auto menu = this->getChildByID("vc-mic-btn")) {
-            auto lbl = static_cast<CCLabelBMFont*>(menu);
+        if (auto lbl = static_cast<CCLabelBMFont*>(this->getChildByID("vc-mic-label"))) {
             lbl->setString(g_micMuted ? "Mic OFF" : "Mic ON");
             lbl->setColor(g_micMuted ? ccColor3B{255, 80, 80} : ccColor3B{0, 255, 100});
         }
