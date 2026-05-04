@@ -7,13 +7,13 @@
 #include <string>
 #include <vector>
 #include <cstring>
-
-#ifdef GEODE_IS_ANDROID
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <unistd.h>
+
+#ifdef GEODE_IS_ANDROID
 #include <SLES/OpenSLES.h>
 #include <SLES/OpenSLES_Android.h>
 #endif
@@ -25,12 +25,12 @@ using namespace geode::prelude;
 #define FRAMES_PER_BUFFER 1024
 
 static std::atomic<int> g_state(0);
+static int g_socket = -1;
 static std::atomic<bool> g_recording(false);
 static std::atomic<bool> g_playing(false);
 static std::atomic<bool> g_micMuted(false);
 
 #ifdef GEODE_IS_ANDROID
-static int g_socket = -1;
 static SLObjectItf g_engineObj = nullptr;
 static SLEngineItf g_engine = nullptr;
 static SLObjectItf g_recorderObj = nullptr;
@@ -152,6 +152,7 @@ void stopRecording() {
     g_recorder = nullptr; g_player = nullptr; g_engine = nullptr;
     g_recorderQueue = nullptr; g_playerQueue = nullptr;
 }
+#endif
 
 bool connectToServer() {
     struct addrinfo hints{}, *res;
@@ -169,17 +170,20 @@ bool connectToServer() {
     char buf[512] = {};
     recv(g_socket, buf, sizeof(buf) - 1, 0);
     freeaddrinfo(res);
+#ifdef GEODE_IS_ANDROID
     std::thread(receiveLoop).detach();
+#endif
     return true;
 }
 
 void disconnectFromServer() {
+#ifdef GEODE_IS_ANDROID
     stopRecording();
+#endif
     if (g_socket >= 0) { close(g_socket); g_socket = -1; }
     g_state = 0;
     g_micMuted = false;
 }
-#endif
 
 // ===== ГОЛОВНИЙ ПОПАП =====
 class VoiceChatPopup : public Popup<> {
@@ -205,8 +209,9 @@ public:
         menu->setPosition({0, 0});
         m_mainLayer->addChild(menu);
 
+        // Статус
         m_statusLabel = CCLabelBMFont::create(
-            g_state == 2 ? "Connected" : (g_state == 1 ? "Connecting..." : "Disconnected"),
+            g_state == 2 ? "● Connected" : (g_state == 1 ? "● Connecting..." : "● Disconnected"),
             "bigFont.fnt"
         );
         m_statusLabel->setScale(0.45f);
@@ -219,6 +224,7 @@ public:
         m_mainLayer->addChild(m_statusLabel);
 
         if (g_state == 2) {
+            // Кнопка мікрофону
             auto micSpr = ButtonSprite::create(
                 g_micMuted ? "Mic: OFF" : "Mic: ON",
                 "bigFont.fnt",
@@ -226,28 +232,30 @@ public:
                 0.8f
             );
             m_micBtn = CCMenuItemSpriteExtra::create(
-                micSpr, nullptr, this,
+                micSpr, this,
                 menu_selector(VoiceChatPopup::onToggleMic)
             );
             m_micBtn->setPosition({winSize.width / 2, winSize.height / 2 + 15});
             menu->addChild(m_micBtn);
 
+            // Кнопка відключитись
             auto disconnectSpr = ButtonSprite::create(
                 "Disconnect", "bigFont.fnt", "GJ_button_06.png", 0.8f
             );
             auto disconnectBtn = CCMenuItemSpriteExtra::create(
-                disconnectSpr, nullptr, this,
+                disconnectSpr, this,
                 menu_selector(VoiceChatPopup::onDisconnect)
             );
             disconnectBtn->setPosition({winSize.width / 2, winSize.height / 2 - 30});
             menu->addChild(disconnectBtn);
 
         } else if (g_state == 0) {
+            // Кнопка підключитись
             auto connectSpr = ButtonSprite::create(
                 "Connect", "bigFont.fnt", "GJ_button_01.png", 0.8f
             );
             auto connectBtn = CCMenuItemSpriteExtra::create(
-                connectSpr, nullptr, this,
+                connectSpr, this,
                 menu_selector(VoiceChatPopup::onConnect)
             );
             connectBtn->setPosition({winSize.width / 2, winSize.height / 2});
@@ -259,8 +267,8 @@ public:
 
     void onToggleMic(CCObject*) {
         g_micMuted = !g_micMuted;
-        this->onClose(nullptr);
-        VoiceChatPopup::create()->show();
+        this->removeFromParent();
+        VoiceChatPopup::create()->addToCurrentScene();
     }
 
     void onConnect(CCObject*) {
@@ -270,24 +278,22 @@ public:
         m_statusLabel->setColor({255, 200, 0});
 
         std::thread([this]() {
-#ifdef GEODE_IS_ANDROID
             if (connectToServer()) {
                 g_state = 2;
+#ifdef GEODE_IS_ANDROID
                 startRecording();
+#endif
                 Loader::get()->queueInMainThread([this]() {
-                    this->onClose(nullptr);
-                    VoiceChatPopup::create()->show();
+                    this->removeFromParent();
+                    VoiceChatPopup::create()->addToCurrentScene();
                 });
             } else {
-#endif
                 g_state = 0;
                 Loader::get()->queueInMainThread([this]() {
                     m_statusLabel->setString("Failed!");
                     m_statusLabel->setColor({255, 80, 80});
                 });
-#ifdef GEODE_IS_ANDROID
             }
-#endif
         }).detach();
     }
 
@@ -298,11 +304,9 @@ public:
             "Cancel", "Disconnect",
             [this](auto, bool confirm) {
                 if (confirm) {
-#ifdef GEODE_IS_ANDROID
                     disconnectFromServer();
-#endif
-                    this->onClose(nullptr);
-                    VoiceChatPopup::create()->show();
+                    this->removeFromParent();
+                    VoiceChatPopup::create()->addToCurrentScene();
                 }
             }
         );
@@ -324,7 +328,7 @@ class $modify(VCPauseLayer, PauseLayer) {
         label->setID("vc-mic-label");
 
         auto btn = CCMenuItemSpriteExtra::create(
-            label, nullptr, this,
+            label, this,
             menu_selector(VCPauseLayer::onToggleMic)
         );
 
@@ -355,7 +359,7 @@ class $modify(VCMenuLayer, MenuLayer) {
 
         auto btn = CCMenuItemSpriteExtra::create(
             CCSprite::createWithSpriteFrameName("GJ_deleteSoundBtn_001.png"),
-            nullptr, this,
+            this,
             menu_selector(VCMenuLayer::onVoiceChat)
         );
         btn->setID("voicechat-btn");
@@ -369,6 +373,6 @@ class $modify(VCMenuLayer, MenuLayer) {
     }
 
     void onVoiceChat(CCObject*) {
-        VoiceChatPopup::create()->show();
+        VoiceChatPopup::create()->addToCurrentScene();
     }
 };
