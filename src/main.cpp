@@ -296,11 +296,10 @@ public:
         volDown->setPosition({winSize.width / 2 - 60, winSize.height / 2 - 60});
 
         auto volUp = CCMenuItemSpriteExtra::create(
-            CCSprite::createWithSpriteFrameName("GJ_arrow_01_001.png"),
+            CCLabelBMFont::create("+", "bigFont.fnt"),
             this,
             menu_selector(VoiceChatLayer::onVolumeUp)
         );
-        volUp->getNormalImage()->setFlipX(true);
         volUp->setPosition({winSize.width / 2 + 60, winSize.height / 2 - 60});
 
         auto volText = CCLabelBMFont::create("100%", "bigFont.fnt");
