@@ -300,7 +300,7 @@ public:
             this,
             menu_selector(VoiceChatLayer::onVolumeUp)
         );
-        volUp->setFlipX(true);
+        volUp->getNormalImage()->setFlipX(true);
         volUp->setPosition({winSize.width / 2 + 60, winSize.height / 2 - 60});
 
         auto volText = CCLabelBMFont::create("100%", "bigFont.fnt");
