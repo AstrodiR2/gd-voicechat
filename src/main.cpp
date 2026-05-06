@@ -1,6 +1,7 @@
 #include <Geode/Geode.hpp>
 #include <Geode/modify/MenuLayer.hpp>
 #include <Geode/modify/PauseLayer.hpp>
+#include <Geode/ui/GeodeUI.hpp>
 #include <thread>
 #include <atomic>
 #include <string>
@@ -185,36 +186,227 @@ void disconnectFromServer() {
     g_micMuted = true;
 }
 
+// ===== DRAGGABLE MIC BUTTON (floating, drag vs tap) =====
+class DraggableMicBtn : public CCNode {
+public:
+    CCPoint m_touchStart;
+    CCPoint m_nodeStart;
+    bool m_dragging = false;
+    bool m_moved = false;
+    CCNode* m_iconMuted = nullptr;
+    CCNode* m_iconActive = nullptr;
+    CCLayerColor* m_bg = nullptr;
+
+    static DraggableMicBtn* create() {
+        auto ret = new DraggableMicBtn();
+        if (ret->init()) { ret->autorelease(); return ret; }
+        delete ret; return nullptr;
+    }
+
+    bool init() {
+        if (!CCNode::init()) return false;
+
+        // Круглый фон
+        m_bg = CCLayerColor::create({50, 50, 50, 200}, 60, 60);
+        m_bg->setPosition({-30, -30});
+        this->addChild(m_bg, 0);
+
+        // Icon muted (перечеркнутый микрофон) — простой крест текстом
+        auto mutedLbl = CCLabelBMFont::create("x", "bigFont.fnt");
+        mutedLbl->setScale(0.7f);
+        mutedLbl->setColor({255, 80, 80});
+        mutedLbl->setPosition({0, 0});
+        mutedLbl->setID("mic-muted-icon");
+        this->addChild(mutedLbl, 1);
+        m_iconMuted = mutedLbl;
+
+        // Icon active
+        auto activeLbl = CCLabelBMFont::create("o", "bigFont.fnt");
+        activeLbl->setScale(0.7f);
+        activeLbl->setColor({0, 255, 100});
+        activeLbl->setPosition({0, 0});
+        activeLbl->setID("mic-active-icon");
+        activeLbl->setVisible(false);
+        this->addChild(activeLbl, 1);
+        m_iconActive = activeLbl;
+
+        this->updateIcon();
+        this->setTouchEnabled(true);
+        CCTouchDispatcher::get()->addTargetedDelegate(this, 0, true);
+        return true;
+    }
+
+    void updateIcon() {
+        m_iconMuted->setVisible(g_micMuted);
+        m_iconActive->setVisible(!g_micMuted);
+        if (g_micMuted)
+            m_bg->setColor({80, 30, 30});
+        else
+            m_bg->setColor({30, 80, 30});
+    }
+
+    bool ccTouchBegan(CCTouch* touch, CCEvent*) override {
+        auto loc = this->convertToNodeSpace(touch->getLocation());
+        if (loc.x < -35 || loc.x > 35 || loc.y < -35 || loc.y > 35) return false;
+        m_touchStart = touch->getLocation();
+        m_nodeStart = this->getPosition();
+        m_dragging = true;
+        m_moved = false;
+        return true;
+    }
+
+    void ccTouchMoved(CCTouch* touch, CCEvent*) override {
+        if (!m_dragging) return;
+        auto delta = touch->getLocation() - m_touchStart;
+        if (std::abs(delta.x) > 5 || std::abs(delta.y) > 5) m_moved = true;
+        if (m_moved) this->setPosition(m_nodeStart + delta);
+    }
+
+    void ccTouchEnded(CCTouch* touch, CCEvent*) override {
+        if (!m_dragging) return;
+        m_dragging = false;
+        if (!m_moved) {
+            // Toggle mic
+            g_micMuted = !g_micMuted;
+            this->updateIcon();
+        }
+    }
+
+    void onExit() override {
+        CCTouchDispatcher::get()->removeDelegate(this);
+        CCNode::onExit();
+    }
+};
+
+// ===== SLIDER VOLUME NODE =====
+// Простой слайдер через CCControlSlider или ручной через touch
+class VCSlider : public CCNode {
+public:
+    CCLayerColor* m_track = nullptr;
+    CCLayerColor* m_fill = nullptr;
+    CCLayerColor* m_thumb = nullptr;
+    CCLabelBMFont* m_pctLabel = nullptr;
+    float m_width = 200.f;
+    bool m_dragging = false;
+
+    static VCSlider* create(float width) {
+        auto ret = new VCSlider();
+        ret->m_width = width;
+        if (ret->init()) { ret->autorelease(); return ret; }
+        delete ret; return nullptr;
+    }
+
+    bool init() {
+        if (!CCNode::init()) return false;
+
+        float h = 8.f;
+        // Track bg
+        m_track = CCLayerColor::create({60, 60, 60, 255}, m_width, h);
+        m_track->setPosition({-m_width / 2, -h / 2});
+        this->addChild(m_track, 0);
+
+        // Fill
+        m_fill = CCLayerColor::create({0, 200, 80, 255}, m_width * g_othersVolume / 2.f, h);
+        m_fill->setPosition({-m_width / 2, -h / 2});
+        this->addChild(m_fill, 1);
+
+        // Thumb circle
+        m_thumb = CCLayerColor::create({255, 255, 255, 255}, 18, 18);
+        m_thumb->setPosition({-9 + (m_width * g_othersVolume / 2.f) - m_width / 2, -9});
+        this->addChild(m_thumb, 2);
+
+        // Percent label
+        m_pctLabel = CCLabelBMFont::create("100%", "bigFont.fnt");
+        m_pctLabel->setScale(0.4f);
+        m_pctLabel->setColor({220, 220, 220});
+        m_pctLabel->setPosition({m_width / 2 + 30, 0});
+        this->addChild(m_pctLabel, 3);
+
+        this->updateVisuals();
+        CCTouchDispatcher::get()->addTargetedDelegate(this, 0, true);
+        return true;
+    }
+
+    void updateVisuals() {
+        float v = g_othersVolume / 2.f; // 0..1 (max 200%)
+        float fillW = m_width * v;
+        m_fill->setContentSize({fillW, 8});
+        m_thumb->setPositionX(-9 + fillW - m_width / 2);
+        int pct = (int)(g_othersVolume * 100);
+        m_pctLabel->setString((std::to_string(pct) + "%").c_str());
+    }
+
+    bool ccTouchBegan(CCTouch* touch, CCEvent*) override {
+        auto loc = this->convertToNodeSpace(touch->getLocation());
+        if (loc.x < -m_width / 2 - 15 || loc.x > m_width / 2 + 15 || loc.y < -20 || loc.y > 20) return false;
+        m_dragging = true;
+        this->handleTouch(loc);
+        return true;
+    }
+
+    void ccTouchMoved(CCTouch* touch, CCEvent*) override {
+        if (!m_dragging) return;
+        auto loc = this->convertToNodeSpace(touch->getLocation());
+        this->handleTouch(loc);
+    }
+
+    void ccTouchEnded(CCTouch* touch, CCEvent*) override {
+        m_dragging = false;
+    }
+
+    void handleTouch(CCPoint loc) {
+        float t = (loc.x + m_width / 2) / m_width;
+        t = std::max(0.f, std::min(1.f, t));
+        g_othersVolume = t * 2.f; // 0..200%
+        this->updateVisuals();
+    }
+
+    void onExit() override {
+        CCTouchDispatcher::get()->removeDelegate(this);
+        CCNode::onExit();
+    }
+};
+
 // ===== ГОЛОВНЕ МЕНЮ ВОЙСЧАТУ =====
 class VoiceChatLayer : public CCLayer {
 public:
-    CCLabelBMFont* m_statusLabel = nullptr;
-    CCNode* m_connectingNode = nullptr;
-    CCNode* m_settingsNode = nullptr;
+    // Стейти UI: 0=connect screen, 1=connecting, 2=settings
+    int m_uiState = 0;
     int m_dotCount = 0;
 
-    static VoiceChatLayer* create() {
+    // Ноди для кожного стейту
+    CCNode* m_connectNode = nullptr;   // скрін 2 стиль — кнопка Connect
+    CCNode* m_connectingNode = nullptr; // скрін 2 стиль — Connecting...
+    CCNode* m_settingsNode = nullptr;  // скрін 3 стиль — налаштування
+
+    CCLabelBMFont* m_connectingLabel = nullptr;
+
+    static VoiceChatLayer* create(bool alreadyConnected = false) {
         auto ret = new VoiceChatLayer();
+        ret->m_uiState = alreadyConnected ? 2 : 0;
         if (ret->init()) { ret->autorelease(); return ret; }
         delete ret; return nullptr;
     }
 
     bool init() {
         if (!CCLayer::init()) return false;
-
         auto winSize = CCDirector::get()->getWinSize();
 
-        // Темний фон
-        auto bg = CCLayerColor::create({0, 0, 0, 200});
-        this->addChild(bg, -1);
+        // === ФОН — як в GD (іконки бігають) ===
+        // Використовуємо стандартний GD фон MenuGameLayer або просто синій тайловий
+        auto bg = CCSprite::create("GJ_gradientBG.png");
+        if (bg) {
+            bg->setScaleX(winSize.width / bg->getContentSize().width);
+            bg->setScaleY(winSize.height / bg->getContentSize().height);
+            bg->setPosition({winSize.width / 2, winSize.height / 2});
+            bg->setColor({40, 80, 180});
+            this->addChild(bg, -2);
+        } else {
+            auto bgColor = CCLayerColor::create({40, 80, 180, 255});
+            this->addChild(bgColor, -2);
+        }
 
-        // Заголовок
-        auto title = CCLabelBMFont::create("VoiceChat", "goldFont.fnt");
-        title->setScale(0.9f);
-        title->setPosition({winSize.width / 2, winSize.height - 30});
-        this->addChild(title);
-
-        // Кнопка назад
+        // Кнопка назад (стандартна GD)
         auto backBtn = CCMenuItemSpriteExtra::create(
             CCSprite::createWithSpriteFrameName("GJ_arrow_01_001.png"),
             this,
@@ -223,164 +415,202 @@ public:
         auto backMenu = CCMenu::create();
         backMenu->setPosition({25, winSize.height - 25});
         backMenu->addChild(backBtn);
-        this->addChild(backMenu);
+        this->addChild(backMenu, 10);
 
-        // Нода для "Connecting..."
-        m_connectingNode = CCNode::create();
-        m_connectingNode->setPosition({winSize.width / 2, winSize.height / 2});
-        this->addChild(m_connectingNode);
+        this->buildConnectNode();
+        this->buildConnectingNode();
+        this->buildSettingsNode();
 
-        m_statusLabel = CCLabelBMFont::create("Connecting.", "bigFont.fnt");
-        m_statusLabel->setScale(0.6f);
-        m_statusLabel->setColor({255, 255, 255});
-        m_connectingNode->addChild(m_statusLabel);
-
-        // Нода для налаштувань (прихована поки)
-        m_settingsNode = CCNode::create();
-        m_settingsNode->setVisible(false);
-        this->addChild(m_settingsNode);
-
-        this->buildSettingsUI();
-
-        // Таймер для анімації крапок
-        this->schedule(schedule_selector(VoiceChatLayer::updateDots), 0.5f);
-
-        // Починаємо підключення
-        this->startConnect();
-
-        // Закрити при кліку на фон
-        this->setTouchEnabled(true);
+        // Показуємо потрібний стейт
+        m_connectNode->setVisible(m_uiState == 0);
+        m_connectingNode->setVisible(m_uiState == 1);
+        m_settingsNode->setVisible(m_uiState == 2);
 
         return true;
     }
 
-    void buildSettingsUI() {
+    // ======================================================
+    // CONNECT NODE — стиль як Globed (скрін 2): панель з кнопкою
+    // ======================================================
+    void buildConnectNode() {
         auto winSize = CCDirector::get()->getWinSize();
+        m_connectNode = CCNode::create();
+        this->addChild(m_connectNode, 5);
+
+        // Панель (GJ_square07.png або GJ_square01.png)
+        auto panel = CCScale9Sprite::create("GJ_square07.png");
+        if (!panel) panel = CCScale9Sprite::create("GJ_square01.png");
+        panel->setContentSize({300, 200});
+        panel->setPosition({winSize.width / 2, winSize.height / 2});
+        m_connectNode->addChild(panel);
+
+        // Заголовок всередині панелі
+        auto title = CCLabelBMFont::create("VoiceChat", "goldFont.fnt");
+        title->setScale(0.85f);
+        title->setPosition({winSize.width / 2, winSize.height / 2 + 65});
+        m_connectNode->addChild(title);
+
+        // Кнопка Connect — зелена як в Globed
+        auto connectSpr = ButtonSprite::create(
+            "Connect", "bigFont.fnt", "GJ_button_01.png", 1.0f
+        );
+        auto connectBtn = CCMenuItemSpriteExtra::create(
+            connectSpr, this,
+            menu_selector(VoiceChatLayer::onConnect)
+        );
+
         auto menu = CCMenu::create();
         menu->setPosition({0, 0});
-        m_settingsNode->addChild(menu);
+        connectBtn->setPosition({winSize.width / 2, winSize.height / 2});
+        menu->addChild(connectBtn);
+        m_connectNode->addChild(menu);
+    }
 
-        // Статус підключення
-        auto statusDot = CCLabelBMFont::create("● Connected", "bigFont.fnt");
-        statusDot->setScale(0.5f);
-        statusDot->setColor({0, 255, 100});
-        statusDot->setPosition({winSize.width / 2, winSize.height / 2 + 60});
-        m_settingsNode->addChild(statusDot);
+    // ======================================================
+    // CONNECTING NODE — та ж панель, але з анімацією тексту
+    // ======================================================
+    void buildConnectingNode() {
+        auto winSize = CCDirector::get()->getWinSize();
+        m_connectingNode = CCNode::create();
+        this->addChild(m_connectingNode, 5);
 
-        // Мікрофон кнопка
-        auto micSpr = ButtonSprite::create(
-            "Mic: OFF", "bigFont.fnt", "GJ_button_06.png", 0.8f
-        );
-        micSpr->setTag(200);
-        auto micBtn = CCMenuItemSpriteExtra::create(
-            micSpr, this,
-            menu_selector(VoiceChatLayer::onToggleMic)
-        );
-        micBtn->setPosition({winSize.width / 2, winSize.height / 2 + 10});
-        micBtn->setTag(201);
-        menu->addChild(micBtn);
+        auto panel = CCScale9Sprite::create("GJ_square07.png");
+        if (!panel) panel = CCScale9Sprite::create("GJ_square01.png");
+        panel->setContentSize({300, 200});
+        panel->setPosition({winSize.width / 2, winSize.height / 2});
+        m_connectingNode->addChild(panel);
 
-        // Гучність інших
-        auto volLabel = CCLabelBMFont::create("Others Volume:", "bigFont.fnt");
-        volLabel->setScale(0.4f);
-        volLabel->setColor({200, 200, 200});
-        volLabel->setPosition({winSize.width / 2, winSize.height / 2 - 35});
-        m_settingsNode->addChild(volLabel);
+        auto title = CCLabelBMFont::create("VoiceChat", "goldFont.fnt");
+        title->setScale(0.85f);
+        title->setPosition({winSize.width / 2, winSize.height / 2 + 65});
+        m_connectingNode->addChild(title);
 
-        // Кнопки гучності
-        auto volDown = CCMenuItemSpriteExtra::create(
-            CCSprite::createWithSpriteFrameName("GJ_arrow_01_001.png"),
-            this,
-            menu_selector(VoiceChatLayer::onVolumeDown)
-        );
-        volDown->setPosition({winSize.width / 2 - 60, winSize.height / 2 - 60});
+        m_connectingLabel = CCLabelBMFont::create("Connecting.", "bigFont.fnt");
+        m_connectingLabel->setScale(0.55f);
+        m_connectingLabel->setColor({255, 255, 255});
+        m_connectingLabel->setPosition({winSize.width / 2, winSize.height / 2});
+        m_connectingNode->addChild(m_connectingLabel);
+    }
 
-        auto volUp = CCMenuItemSpriteExtra::create(
-            CCLabelBMFont::create("+", "bigFont.fnt"),
-            this,
-            menu_selector(VoiceChatLayer::onVolumeUp)
-        );
-        volUp->setPosition({winSize.width / 2 + 60, winSize.height / 2 - 60});
+    // ======================================================
+    // SETTINGS NODE — стиль як Global Room (скрін 3): велика панель
+    // ======================================================
+    void buildSettingsNode() {
+        auto winSize = CCDirector::get()->getWinSize();
+        m_settingsNode = CCNode::create();
+        this->addChild(m_settingsNode, 5);
 
-        auto volText = CCLabelBMFont::create("100%", "bigFont.fnt");
-        volText->setScale(0.5f);
-        volText->setTag(202);
-        volText->setPosition({winSize.width / 2, winSize.height / 2 - 60});
-        m_settingsNode->addChild(volText);
+        // Велика панель як Global Room
+        auto panel = CCScale9Sprite::create("GJ_square07.png");
+        if (!panel) panel = CCScale9Sprite::create("GJ_square01.png");
+        panel->setContentSize({360, 300});
+        panel->setPosition({winSize.width / 2, winSize.height / 2});
+        m_settingsNode->addChild(panel);
 
-        menu->addChild(volDown);
-        menu->addChild(volUp);
+        // Заголовок у верхній частині панелі з жовтою рамкою (як "Global Room")
+        auto headerBg = CCScale9Sprite::create("GJ_square02.png");
+        if (headerBg) {
+            headerBg->setContentSize({340, 40});
+            headerBg->setPosition({winSize.width / 2, winSize.height / 2 + 115});
+            m_settingsNode->addChild(headerBg, 1);
+        }
 
-        // Кнопка відключитись
+        auto title = CCLabelBMFont::create("VoiceChat", "goldFont.fnt");
+        title->setScale(0.7f);
+        title->setPosition({winSize.width / 2, winSize.height / 2 + 115});
+        m_settingsNode->addChild(title, 2);
+
+        // Роздільник
+        auto line = CCLayerColor::create({255, 255, 255, 40}, 330, 2);
+        line->setPosition({winSize.width / 2 - 165, winSize.height / 2 + 90});
+        m_settingsNode->addChild(line, 1);
+
+        auto menu = CCMenu::create();
+        menu->setPosition({0, 0});
+        m_settingsNode->addChild(menu, 2);
+
+        // --- СЛАЙДЕР ГУЧНОСТІ ---
+        auto volTitle = CCLabelBMFont::create("Others Volume", "bigFont.fnt");
+        volTitle->setScale(0.45f);
+        volTitle->setColor({200, 200, 200});
+        volTitle->setPosition({winSize.width / 2, winSize.height / 2 + 60});
+        m_settingsNode->addChild(volTitle, 2);
+
+        auto slider = VCSlider::create(200.f);
+        slider->setPosition({winSize.width / 2 - 15, winSize.height / 2 + 30});
+        m_settingsNode->addChild(slider, 3);
+
+        // --- КНОПКА DISCONNECT ---
         auto discSpr = ButtonSprite::create(
-            "Disconnect", "bigFont.fnt", "GJ_button_06.png", 0.8f
+            "Disconnect", "bigFont.fnt", "GJ_button_06.png", 0.9f
         );
         auto discBtn = CCMenuItemSpriteExtra::create(
             discSpr, this,
             menu_selector(VoiceChatLayer::onDisconnect)
         );
-        discBtn->setPosition({winSize.width / 2, winSize.height / 2 - 100});
+        discBtn->setPosition({winSize.width / 2, winSize.height / 2 - 60});
         menu->addChild(discBtn);
+
+        // --- Плаваюча кнопка мік (додається окремо поверх усього) ---
+        // Буде додана після того як settingsNode стає видимим
     }
 
-    void startConnect() {
+    void showSettingsAndAddMicBtn() {
+        auto winSize = CCDirector::get()->getWinSize();
+        m_settingsNode->setVisible(true);
+
+        // Floating draggable mic button
+        auto micBtn = DraggableMicBtn::create();
+        micBtn->setPosition({winSize.width - 50, 50});
+        micBtn->setID("floating-mic-btn");
+        this->addChild(micBtn, 20);
+    }
+
+    void onConnect(CCObject*) {
+        // Перехід до connecting з анімацією (стандартна GD — fade/scale)
+        m_connectNode->setVisible(false);
+        m_connectingNode->setVisible(true);
+        this->schedule(schedule_selector(VoiceChatLayer::updateDots), 0.5f);
+
         g_state = 1;
         std::thread([this]() {
             bool ok = connectToServer();
             Loader::get()->queueInMainThread([this, ok]() {
+                this->unschedule(schedule_selector(VoiceChatLayer::updateDots));
+                m_connectingNode->setVisible(false);
                 if (ok) {
                     g_state = 2;
 #ifdef GEODE_IS_ANDROID
                     startRecording();
 #endif
-                    this->unschedule(schedule_selector(VoiceChatLayer::updateDots));
-                    m_connectingNode->setVisible(false);
-                    m_settingsNode->setVisible(true);
+                    this->showSettingsAndAddMicBtn();
                 } else {
                     g_state = 0;
-                    this->unschedule(schedule_selector(VoiceChatLayer::updateDots));
-                    m_statusLabel->setString("No internet connection!");
-                    m_statusLabel->setColor({255, 80, 80});
-                    m_statusLabel->setScale(0.45f);
+                    m_connectingLabel->setString("No connection!");
+                    m_connectingLabel->setColor({255, 80, 80});
+                    m_connectingNode->setVisible(true);
+                    // Через 2 сек повертаємо Connect кнопку
+                    this->runAction(CCSequence::create(
+                        CCDelayTime::create(2.0f),
+                        CCCallFunc::create(this, callfunc_selector(VoiceChatLayer::showConnectAgain)),
+                        nullptr
+                    ));
                 }
             });
         }).detach();
     }
 
+    void showConnectAgain() {
+        m_connectingNode->setVisible(false);
+        m_connectingLabel->setString("Connecting.");
+        m_connectingLabel->setColor({255, 255, 255});
+        m_connectNode->setVisible(true);
+    }
+
     void updateDots(float) {
         m_dotCount = (m_dotCount % 3) + 1;
         std::string dots(m_dotCount, '.');
-        m_statusLabel->setString(("Connecting" + dots).c_str());
-    }
-
-    void onToggleMic(CCObject*) {
-        g_micMuted = !g_micMuted;
-        auto winSize = CCDirector::get()->getWinSize();
-        if (auto btn = m_settingsNode->getChildByTag(200)) {
-            static_cast<ButtonSprite*>(btn)->updateBGImage(
-                g_micMuted ? "GJ_button_06.png" : "GJ_button_01.png"
-            );
-            static_cast<ButtonSprite*>(btn)->setString(
-                g_micMuted ? "Mic: OFF" : "Mic: ON"
-            );
-        }
-    }
-
-    void onVolumeDown(CCObject*) {
-        g_othersVolume = std::max(0.0f, g_othersVolume - 0.1f);
-        updateVolumeLabel();
-    }
-
-    void onVolumeUp(CCObject*) {
-        g_othersVolume = std::min(2.0f, g_othersVolume + 0.1f);
-        updateVolumeLabel();
-    }
-
-    void updateVolumeLabel() {
-        if (auto lbl = static_cast<CCLabelBMFont*>(m_settingsNode->getChildByTag(202))) {
-            int pct = (int)(g_othersVolume * 100);
-            lbl->setString((std::to_string(pct) + "%").c_str());
-        }
+        m_connectingLabel->setString(("Connecting" + dots).c_str());
     }
 
     void onDisconnect(CCObject*) {
@@ -391,28 +621,39 @@ public:
             [this](auto, bool confirm) {
                 if (confirm) {
                     disconnectFromServer();
-                    this->onBack(nullptr);
+                    // Видаляємо плаваючу кнопку мік
+                    if (auto mb = this->getChildByID("floating-mic-btn")) mb->removeFromParent();
+                    m_settingsNode->setVisible(false);
+                    m_connectNode->setVisible(true);
                 }
             }
         );
     }
 
     void onBack(CCObject*) {
-        CCDirector::get()->popScene();
+        // Стандартна GD анімація — popSceneWithTransition
+        CCDirector::get()->popSceneWithTransition(0.5f, PopTransition::kPopTransitionFade);
     }
 };
 
 // ===== КНОПКА МІК НА ПАУЗІ =====
+// Залишаємо компактною, але стилізуємо
 class $modify(VCPauseLayer, PauseLayer) {
     void customSetup() {
         PauseLayer::customSetup();
         if (g_state != 2) return;
 
         auto winSize = CCDirector::get()->getWinSize();
+
+        // Маленька кругла кнопка мік у кутку
+        auto bg = CCScale9Sprite::create("GJ_square07.png");
+        if (!bg) bg = CCScale9Sprite::create("GJ_square01.png");
+        bg->setContentSize({70, 30});
+
         auto label = CCLabelBMFont::create(
             g_micMuted ? "Mic OFF" : "Mic ON", "bigFont.fnt"
         );
-        label->setScale(0.45f);
+        label->setScale(0.4f);
         label->setColor(g_micMuted ? ccColor3B{255, 80, 80} : ccColor3B{0, 255, 100});
         label->setID("vc-mic-label");
 
@@ -421,16 +662,22 @@ class $modify(VCPauseLayer, PauseLayer) {
             menu_selector(VCPauseLayer::onToggleMic)
         );
         auto menu = CCMenu::create();
-        menu->setPosition({winSize.width - 55, winSize.height - 25});
+        menu->setPosition({winSize.width - 45, winSize.height - 20});
         menu->addChild(btn);
         this->addChild(menu, 100);
     }
 
     void onToggleMic(CCObject*) {
         g_micMuted = !g_micMuted;
-        if (auto lbl = static_cast<CCLabelBMFont*>(this->getChildByID("vc-mic-label"))) {
-            lbl->setString(g_micMuted ? "Mic OFF" : "Mic ON");
-            lbl->setColor(g_micMuted ? ccColor3B{255, 80, 80} : ccColor3B{0, 255, 100});
+        auto children = this->getChildren();
+        // Оновлюємо лейбл
+        CCObject* obj;
+        CCARRAY_FOREACH(children, obj) {
+            auto node = static_cast<CCNode*>(obj);
+            if (auto lbl = static_cast<CCLabelBMFont*>(node->getChildByID("vc-mic-label"))) {
+                lbl->setString(g_micMuted ? "Mic OFF" : "Mic ON");
+                lbl->setColor(g_micMuted ? ccColor3B{255, 80, 80} : ccColor3B{0, 255, 100});
+            }
         }
     }
 };
@@ -456,21 +703,10 @@ class $modify(VCMenuLayer, MenuLayer) {
     }
 
     void onVoiceChat(CCObject*) {
-        if (g_state == 2) {
-            // Вже підключений — показуємо налаштування
-            auto scene = CCScene::create();
-            auto layer = VoiceChatLayer::create();
-            // Відразу показуємо налаштування без connecting
-            layer->m_connectingNode->setVisible(false);
-            layer->m_settingsNode->setVisible(true);
-            layer->unschedule(schedule_selector(VoiceChatLayer::updateDots));
-            scene->addChild(layer);
-            CCDirector::get()->pushScene(scene);
-        } else {
-            // Нове підключення
-            auto scene = CCScene::create();
-            scene->addChild(VoiceChatLayer::create());
-            CCDirector::get()->pushScene(scene);
-        }
+        auto layer = VoiceChatLayer::create(g_state == 2);
+        auto scene = CCScene::create();
+        scene->addChild(layer);
+        // Стандартна GD анімація переходу
+        CCDirector::get()->pushScene(CCTransitionFade::create(0.5f, scene));
     }
 };
