@@ -185,14 +185,12 @@ void disconnectFromServer() {
     g_micMuted = true;
 }
 
-// ===== DRAGGABLE MIC BUTTON (плаваюча кнопка мікрофону) =====
-// Показується поверх усього коли підключено (g_state == 2)
-// Тап - показує іконки вкл/викл мікро, довгий дотик/перетягування - переміщує
+// ===== DRAGGABLE MIC BUTTON =====
 class DragMicButton : public CCNode, public CCTouchDelegate {
 public:
     CCSprite* m_circle = nullptr;
-    CCSprite* m_micIcon = nullptr;   // іконка мікро (увімкнено)
-    CCSprite* m_muteIcon = nullptr;  // іконка мікро (вимкнено)
+    CCSprite* m_micIcon = nullptr;
+    CCSprite* m_muteIcon = nullptr;
 
     CCPoint m_touchStart;
     CCPoint m_nodeStartPos;
@@ -205,22 +203,19 @@ public:
         delete ret; return nullptr;
     }
 
-    bool init() {
+    bool init() override {
         if (!CCNode::init()) return false;
 
-        // Коло-фон
         m_circle = CCSprite::createWithSpriteFrameName("GJ_button_02.png");
         if (!m_circle) m_circle = CCSprite::create("GJ_button_02.png");
         m_circle->setScale(1.1f);
         this->addChild(m_circle);
 
-        // Іконка мікро (увімкнено) - використовуємо спрайт з GD
         m_micIcon = CCSprite::createWithSpriteFrameName("GJ_deleteSoundBtn_001.png");
         if (!m_micIcon) m_micIcon = CCSprite::create();
         m_micIcon->setScale(0.6f);
         this->addChild(m_micIcon, 1);
 
-        // Іконка вимкненого мікро - просто перехрещена версія (малюємо X поверх)
         m_muteIcon = CCSprite::createWithSpriteFrameName("GJ_deleteSoundBtn_001.png");
         if (!m_muteIcon) m_muteIcon = CCSprite::create();
         m_muteIcon->setScale(0.6f);
@@ -293,11 +288,9 @@ public:
         if (!m_touchDown) return;
         m_touchDown = false;
         if (!m_wasDragged) {
-            // Тап — перемкнути мікрофон
             g_micMuted = !g_micMuted;
             this->updateMicVisual();
 
-            // Анімація пульсу при тапі
             auto scaleUp = CCScaleTo::create(0.1f, 1.2f);
             auto scaleDown = CCScaleTo::create(0.1f, 1.0f);
             this->runAction(CCSequence::create(scaleUp, scaleDown, nullptr));
@@ -309,19 +302,18 @@ public:
     }
 };
 
-// ===== ГОЛОВНА СЦЕНА ВОЙСЧАТУ (стиль як Globed) =====
+// ===== VOICE CHAT LAYER =====
 class VoiceChatLayer : public CCLayer {
 public:
-    // Стан UI
-    CCNode* m_connectNode = nullptr;     // Показується коли не підключено (кнопка Connect)
-    CCNode* m_connectingNode = nullptr;  // Показується під час підключення
-    CCNode* m_settingsNode = nullptr;    // Показується після підключення
+    CCNode* m_connectNode = nullptr;
+    CCNode* m_connectingNode = nullptr;
+    CCNode* m_settingsNode = nullptr;
 
     CCLabelBMFont* m_connectingLabel = nullptr;
     int m_dotCount = 0;
 
-    // Слайдер гучності
-    CCSliderThumb* m_volSlider = nullptr;
+    // FIX 1: CCSliderThumb -> SliderThumb
+    SliderThumb* m_volSlider = nullptr;
     CCLabelBMFont* m_volLabel = nullptr;
 
     static VoiceChatLayer* create() {
@@ -330,27 +322,23 @@ public:
         delete ret; return nullptr;
     }
 
-    bool init() {
+    bool init() override {
         if (!CCLayer::init()) return false;
 
         auto winSize = CCDirector::get()->getWinSize();
 
-        // ===== ФОН (стиль Globed — синє поле з квадратами як в GD menu) =====
-        // Основний колір фону як в меню GD
         auto bg = CCSprite::create("GJ_gradientBG.png");
         if (bg) {
             bg->setScaleX(winSize.width / bg->getContentSize().width);
             bg->setScaleY(winSize.height / bg->getContentSize().height);
             bg->setPosition({winSize.width / 2, winSize.height / 2});
-            bg->setColor({40, 80, 160}); // синій відтінок як у GD меню
+            bg->setColor({40, 80, 160});
             this->addChild(bg, -2);
         } else {
             auto bgLayer = CCLayerColor::create({32, 72, 148, 255});
             this->addChild(bgLayer, -2);
         }
 
-        // Декоративні кутові квадрати (стиль Globed)
-        // Верхній лівий
         auto cornerTL = CCSprite::create("GJ_square07.png");
         if (cornerTL) {
             cornerTL->setPosition({0, winSize.height});
@@ -358,7 +346,6 @@ public:
             cornerTL->setOpacity(50);
             this->addChild(cornerTL, -1);
         }
-        // Нижній правий
         auto cornerBR = CCSprite::create("GJ_square07.png");
         if (cornerBR) {
             cornerBR->setPosition({winSize.width, 0});
@@ -367,19 +354,16 @@ public:
             this->addChild(cornerBR, -1);
         }
 
-        // ===== ПАНЕЛЬ (стиль Globed — коричневий прямокутник по центру) =====
         auto panel = CCScale9Sprite::create("GJ_square01.png");
         panel->setContentSize({340, 280});
         panel->setPosition({winSize.width / 2, winSize.height / 2});
         this->addChild(panel, 0);
 
-        // ===== ЗАГОЛОВОК =====
         auto title = CCLabelBMFont::create("VoiceChat", "goldFont.fnt");
         title->setScale(0.85f);
         title->setPosition({winSize.width / 2, winSize.height / 2 + 115});
         this->addChild(title, 1);
 
-        // ===== КНОПКА НАЗАД =====
         auto backSpr = CCSprite::createWithSpriteFrameName("GJ_arrow_01_001.png");
         auto backBtn = CCMenuItemSpriteExtra::create(
             backSpr, this, menu_selector(VoiceChatLayer::onBack)
@@ -389,19 +373,16 @@ public:
         backMenu->addChild(backBtn);
         this->addChild(backMenu, 1);
 
-        // ===== НОДА CONNECT (початковий екран — тільки кнопка Connect) =====
         m_connectNode = CCNode::create();
         m_connectNode->setPosition({winSize.width / 2, winSize.height / 2});
         this->addChild(m_connectNode, 1);
 
-        // Текст сервера
         auto serverLabel = CCLabelBMFont::create("VoiceChat Server", "bigFont.fnt");
         serverLabel->setScale(0.5f);
         serverLabel->setColor({255, 220, 100});
         serverLabel->setPosition({0, 40});
         m_connectNode->addChild(serverLabel);
 
-        // Кнопка Connect (зелена, як у Globed)
         auto connectSpr = ButtonSprite::create(
             "Connect", "bigFont.fnt", "GJ_button_01.png", 0.9f
         );
@@ -410,7 +391,6 @@ public:
         );
         connectBtn->setPosition({0, 0});
 
-        // Маленькі іконки знизу (стиль Globed)
         auto iconMenu = CCMenu::create();
         iconMenu->setPosition({0, -60});
 
@@ -420,7 +400,6 @@ public:
         m_connectNode->addChild(connectMenu);
         m_connectNode->addChild(iconMenu);
 
-        // ===== НОДА CONNECTING (анімація підключення) =====
         m_connectingNode = CCNode::create();
         m_connectingNode->setPosition({winSize.width / 2, winSize.height / 2});
         m_connectingNode->setVisible(false);
@@ -432,7 +411,6 @@ public:
         m_connectingLabel->setPosition({0, 0});
         m_connectingNode->addChild(m_connectingLabel);
 
-        // ===== НОДА SETTINGS (після підключення — стиль Globed) =====
         m_settingsNode = CCNode::create();
         m_settingsNode->setPosition({winSize.width / 2, winSize.height / 2});
         m_settingsNode->setVisible(false);
@@ -440,7 +418,6 @@ public:
 
         this->buildSettingsUI();
 
-        // Якщо вже підключені — одразу показуємо налаштування
         if (g_state == 2) {
             m_connectNode->setVisible(false);
             m_settingsNode->setVisible(true);
@@ -450,14 +427,12 @@ public:
     }
 
     void buildSettingsUI() {
-        // ===== Статус підключення =====
         auto statusDot = CCLabelBMFont::create("● Connected", "bigFont.fnt");
         statusDot->setScale(0.45f);
         statusDot->setColor({0, 255, 100});
         statusDot->setPosition({0, 95});
         m_settingsNode->addChild(statusDot);
 
-        // ===== Розділювач =====
         auto sep = CCSprite::createWithSpriteFrameName("floorLine_001.png");
         if (sep) {
             sep->setScaleX(1.8f);
@@ -466,14 +441,12 @@ public:
             m_settingsNode->addChild(sep);
         }
 
-        // ===== Мікрофон секція =====
         auto micLabel = CCLabelBMFont::create("Microphone", "bigFont.fnt");
         micLabel->setScale(0.4f);
         micLabel->setColor({180, 200, 255});
         micLabel->setPosition({0, 55});
         m_settingsNode->addChild(micLabel);
 
-        // Кнопка мікрофону (велика, округла, Globed стиль)
         auto micBtnSpr = ButtonSprite::create(
             g_micMuted ? "Mic: OFF" : "Mic: ON",
             "bigFont.fnt",
@@ -492,20 +465,12 @@ public:
         micMenu->addChild(micBtn);
         m_settingsNode->addChild(micMenu);
 
-        // ===== Гучність — слайдер =====
         auto volTitleLabel = CCLabelBMFont::create("Others Volume", "bigFont.fnt");
         volTitleLabel->setScale(0.4f);
         volTitleLabel->setColor({180, 200, 255});
         volTitleLabel->setPosition({0, -15});
         m_settingsNode->addChild(volTitleLabel);
 
-        // Слайдер Geode/GD
-        // GD має вбудований CCSlider — використовуємо його
-        auto sliderTrack = CCSprite::create("sliderBar.png");
-        if (!sliderTrack) sliderTrack = CCSprite::createWithSpriteFrameName("sliderBar.png");
-
-        // Використовуємо Slider з Geode
-        // Slider складається з: трек + повзунок (thumb)
         auto sliderBg = CCScale9Sprite::create("square02_small.png");
         if (!sliderBg) sliderBg = CCScale9Sprite::create("GJ_square07.png");
         if (sliderBg) {
@@ -515,7 +480,6 @@ public:
             m_settingsNode->addChild(sliderBg);
         }
 
-        // Заповнена частина слайдера
         auto sliderFill = CCScale9Sprite::create("square02_small.png");
         if (!sliderFill) sliderFill = CCScale9Sprite::create("GJ_square07.png");
         if (sliderFill) {
@@ -527,25 +491,19 @@ public:
             m_settingsNode->addChild(sliderFill, 1);
         }
 
-        // Повзунок (thumb)
         auto thumbSpr = CCSprite::createWithSpriteFrameName("slidergroove2.png");
-        if (!thumbSpr) thumbSpr = CCSprite::create("slidergroove2.png");
-
-        // Thumb — кнопка-повзунок
-        if (thumbSpr) {
-            thumbSpr->setScale(0.6f);
-        } else {
-            // fallback — звичайний круглий спрайт
+        if (!thumbSpr) {
             thumbSpr = CCSprite::createWithSpriteFrameName("GJ_button_01.png");
             if (!thumbSpr) thumbSpr = CCSprite::create();
             thumbSpr->setScale(0.3f);
+        } else {
+            thumbSpr->setScale(0.6f);
         }
 
         auto thumbBtn = CCMenuItemSpriteExtra::create(
             thumbSpr, this, menu_selector(VoiceChatLayer::onVolumeDummy)
         );
         thumbBtn->setTag(301);
-        // Позиція = -120 + volume*200 (від 0 до 1)
         thumbBtn->setPosition({-120.0f + g_othersVolume * 200.0f, -40});
 
         auto thumbMenu = CCMenu::create();
@@ -553,7 +511,6 @@ public:
         thumbMenu->addChild(thumbBtn);
         m_settingsNode->addChild(thumbMenu, 2);
 
-        // Підпис відсотків
         m_volLabel = CCLabelBMFont::create("100%", "bigFont.fnt");
         m_volLabel->setScale(0.45f);
         m_volLabel->setTag(202);
@@ -561,7 +518,6 @@ public:
         m_settingsNode->addChild(m_volLabel, 2);
         this->updateVolumeLabel();
 
-        // Розділювач
         auto sep2 = CCSprite::createWithSpriteFrameName("floorLine_001.png");
         if (sep2) {
             sep2->setScaleX(1.8f);
@@ -570,7 +526,6 @@ public:
             m_settingsNode->addChild(sep2);
         }
 
-        // ===== Кнопка Disconnect =====
         auto discSpr = ButtonSprite::create(
             "Disconnect", "bigFont.fnt", "GJ_button_06.png", 0.75f
         );
@@ -583,17 +538,13 @@ public:
         discMenu->addChild(discBtn);
         m_settingsNode->addChild(discMenu);
 
-        // Додаємо touch listener для слайдера
         this->setTouchEnabled(true);
         this->setTouchMode(ccTouchesMode::kCCTouchesOneByOne);
     }
 
-    // Dummy для thumb (реальний drag — через ccTouchBegan)
     void onVolumeDummy(CCObject*) {}
 
-    // ===== TOUCH для слайдера гучності =====
     bool m_draggingSlider = false;
-    CCPoint m_sliderOrigin; // в координатах вікна
 
     void registerWithTouchDispatcher() override {
         CCTouchDispatcher::get()->addTargetedDelegate(this, -100, true);
@@ -601,9 +552,7 @@ public:
 
     bool ccTouchBegan(CCTouch* touch, CCEvent*) override {
         if (!m_settingsNode->isVisible()) return false;
-        // Зона слайдера: від -120 до +80 по X, Y ≈ -40 відносно settingsNode
         CCPoint loc = m_settingsNode->convertToNodeSpace(touch->getLocation());
-        // Зона touch слайдера: x від -120 до 80, y від -55 до -25
         if (loc.x >= -120 && loc.x <= 80 && loc.y >= -55 && loc.y <= -25) {
             m_draggingSlider = true;
             this->updateSliderFromTouch(loc.x);
@@ -627,21 +576,12 @@ public:
     }
 
     void updateSliderFromTouch(float x) {
-        // x від -120 до 80 → vol від 0.0 до 1.0
         float norm = (x - (-120.0f)) / 200.0f;
         norm = std::max(0.0f, std::min(1.0f, norm));
-        g_othersVolume = norm * 2.0f; // макс 200%
+        g_othersVolume = norm * 2.0f;
 
-        // Оновити thumb позицію
-        if (auto thumbMenu = m_settingsNode->getChildByTag(0)) {}
-        // Шукаємо thumb через дітей settingsNode
-        // thumb знаходиться в меню — спробуємо через getChildByTag на меню
-        // Простіше — перебудуємо позицію thumb безпосередньо
-        // Thumb = меню з тегом 0 (не тегований), тому використаємо userObject або просто scale9
-        // Замість цього оновимо через schedule
         Loader::get()->queueInMainThread([this, norm]() {
             this->updateVolumeLabel();
-            // Оновлюємо fill
             if (auto fill = static_cast<CCScale9Sprite*>(m_settingsNode->getChildByTag(300))) {
                 fill->setContentSize({norm * 200.0f, 8});
                 fill->setPosition({-120.0f + norm * 100.0f, -40});
@@ -649,7 +589,6 @@ public:
         });
     }
 
-    // ===== ПІДКЛЮЧЕННЯ =====
     void onConnect(CCObject*) {
         m_connectNode->setVisible(false);
         m_connectingNode->setVisible(true);
@@ -666,33 +605,32 @@ public:
 #ifdef GEODE_IS_ANDROID
                     startRecording();
 #endif
-                    // Анімація появи налаштувань (стиль GD — fade + scale)
                     m_connectingNode->setVisible(false);
                     m_settingsNode->setVisible(true);
+                    // FIX 2: CCNode не має setOpacity — прибрано, залишено лише scale анімацію
                     m_settingsNode->setScale(0.8f);
-                    m_settingsNode->setOpacity(0);
-                    auto fadeIn = CCFadeIn::create(0.2f);
                     auto scaleUp = CCScaleTo::create(0.2f, 1.0f);
-                    m_settingsNode->runAction(CCSpawn::create(fadeIn, scaleUp, nullptr));
+                    m_settingsNode->runAction(scaleUp);
                 } else {
                     g_state = 0;
-                    m_connectingNode->setVisible(false);
-                    m_connectNode->setVisible(true);
                     m_connectingLabel->setString("No internet connection!");
                     m_connectingLabel->setColor({255, 80, 80});
 
-                    // Показуємо помилку тимчасово і повертаємось до Connect
                     m_connectNode->setVisible(false);
                     m_connectingNode->setVisible(true);
-                    this->scheduleOnce([this](float) {
-                        m_connectingNode->setVisible(false);
-                        m_connectNode->setVisible(true);
-                        m_connectingLabel->setString("Connecting.");
-                        m_connectingLabel->setColor({200, 220, 255});
-                    }, 2.5f, "reset_connect_error");
+                    // FIX 3: scheduleOnce приймає лише 2 аргументи — виправлено через окремий метод
+                    this->scheduleOnce(schedule_selector(VoiceChatLayer::resetConnectError), 2.5f);
                 }
             });
         }).detach();
+    }
+
+    // FIX 3: окремий метод замість лямбди з 3 аргументами
+    void resetConnectError(float) {
+        m_connectingNode->setVisible(false);
+        m_connectNode->setVisible(true);
+        m_connectingLabel->setString("Connecting.");
+        m_connectingLabel->setColor({200, 220, 255});
     }
 
     void updateDots(float) {
@@ -731,12 +669,11 @@ public:
     }
 
     void onBack(CCObject*) {
-        // Анімація переходу (стандартна GD)
         CCDirector::get()->popSceneWithTransition(0.5f, PopTransition::kPopTransitionFade);
     }
 };
 
-// ===== КНОПКА МІК НА ПАУЗІ =====
+// ===== MIC BUTTON ON PAUSE =====
 class $modify(VCPauseLayer, PauseLayer) {
     void customSetup() {
         PauseLayer::customSetup();
@@ -769,12 +706,11 @@ class $modify(VCPauseLayer, PauseLayer) {
     }
 };
 
-// ===== КНОПКА В ГОЛОВНОМУ МЕНЮ + ПЛАВАЮЧА КНОПКА МІК =====
+// ===== MAIN MENU BUTTON + FLOATING MIC =====
 class $modify(VCMenuLayer, MenuLayer) {
     bool init() {
         if (!MenuLayer::init()) return false;
 
-        // Кнопка відкрити VoiceChat меню
         auto btn = CCMenuItemSpriteExtra::create(
             CCSprite::createWithSpriteFrameName("GJ_deleteSoundBtn_001.png"),
             this,
@@ -788,7 +724,6 @@ class $modify(VCMenuLayer, MenuLayer) {
             static_cast<CCMenu*>(menu)->updateLayout();
         }
 
-        // Якщо підключені — показуємо плаваючу кнопку мікрофону
         if (g_state == 2) {
             this->addDragMicButton();
         }
@@ -800,14 +735,12 @@ class $modify(VCMenuLayer, MenuLayer) {
         auto winSize = CCDirector::get()->getWinSize();
         auto dragBtn = DragMicButton::create();
         dragBtn->setID("drag-mic-btn");
-        // Стартова позиція — правий нижній кут
         dragBtn->setPosition({winSize.width - 50, 80});
         dragBtn->setZOrder(200);
         this->addChild(dragBtn);
     }
 
     void onVoiceChat(CCObject*) {
-        // Анімація переходу як в GD (fade)
         auto scene = CCScene::create();
         scene->addChild(VoiceChatLayer::create());
         CCDirector::get()->pushScene(CCTransitionFade::create(0.4f, scene));
